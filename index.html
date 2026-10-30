@@ -1369,7 +1369,7 @@ html, body { background-color: transparent !important; background-image: none !i
 
           <div class="form-group" style="position: relative;">
             <label>Search Service</label>
-            <input type="text" id="serviceSearchInput" placeholder="Type to search — e.g. type P to list services starting with P" autocomplete="off" oninput="renderServiceSearchResults()" onfocus="renderServiceSearchResults()" required>
+            <input type="text" id="serviceSearchInput" placeholder="Search services" autocomplete="off" oninput="renderServiceSearchResults()" onfocus="renderServiceSearchResults()" required>
             <div id="serviceSearchResults" hidden style="position: absolute; top: 100%; left: 0; right: 0; z-index: 30; max-height: 240px; overflow-y: auto; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow);"></div>
             <select id="serviceSelect" onchange="handleServiceSelectionChange()" style="display: none;"></select>
           </div>
@@ -10517,10 +10517,10 @@ function openBusinessProfile(bizId) {
   html += '<div class="app-card" style="border-left:5px solid var(--primary)"><h3 style="font-size:1rem;font-weight:800;margin-bottom:12px"><i class="fa-solid fa-database" style="color:var(--primary)"></i> Business Data Usage (IST)</h3>'+
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:14px">'+
     '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Current Storage</span><div style="font-size:1.3rem;font-weight:800;color:var(--primary);margin-top:4px">'+(usage.known?usage.currentKB.toFixed(1)+' KB':'Unavailable')+'</div></div>'+
-    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Cumulative Data Added</span><div style="font-size:1.3rem;font-weight:800;color:var(--accent-green);margin-top:4px">'+(usage.cumulativeKB>0?usage.cumulativeKB.toFixed(1)+' KB':'Unavailable')+'</div></div>'+
-    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Added Today (IST)</span><div style="font-size:1.3rem;font-weight:800;color:var(--accent-amber);margin-top:4px">'+(usage.todayKB>0?usage.todayKB.toFixed(1)+' KB':'Unavailable')+'</div></div>'+
-    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Weekly Usage</span><div style="font-size:1.3rem;font-weight:800;color:var(--accent-purple);margin-top:4px">'+(usage.weeklyKB>0?usage.weeklyKB.toFixed(1)+' KB':'Unavailable')+'</div></div>'+
-    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Monthly Usage</span><div style="font-size:1.3rem;font-weight:800;color:var(--atmos-navy);margin-top:4px">'+(usage.monthlyKB>0?usage.monthlyKB.toFixed(1)+' KB':'Unavailable')+'</div></div>'+
+    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Cumulative Data Added</span><div style="font-size:1.3rem;font-weight:800;color:var(--accent-green);margin-top:4px">'+((usage.cumulativeKB||0).toFixed(1)+' KB')+'</div></div>'+
+    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Added Today (IST)</span><div style="font-size:1.3rem;font-weight:800;color:var(--accent-amber);margin-top:4px">'+((usage.todayKB||0).toFixed(1)+' KB')+'</div></div>'+
+    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Weekly Usage</span><div style="font-size:1.3rem;font-weight:800;color:var(--accent-purple);margin-top:4px">'+((usage.weeklyKB||0).toFixed(1)+' KB')+'</div></div>'+
+    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Monthly Usage</span><div style="font-size:1.3rem;font-weight:800;color:var(--atmos-navy);margin-top:4px">'+((usage.monthlyKB||0).toFixed(1)+' KB')+'</div></div>'+
     '</div>';
   if (usage.estimated) {
     html += '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-md);padding:8px 12px;font-size:.78rem;color:#92400e"><i class="fa-solid fa-circle-info"></i> Data usage figures are estimates based on stored metadata. Actual figures are shown only for the currently connected business.</div>';
@@ -12481,10 +12481,25 @@ window.addEventListener('DOMContentLoaded', function() {
     else setLocal('rc_' + (field === 'readAt' ? 'read_' : 'del_') + id, t);
   }
   var ftInboxBound = null, ftInboxSrc = { reg: null, mirror: null };
+  /* Both sources can hold the same message: the platform inbox holds it in full,
+     while the business copy also carries the read/delete receipts. They are merged
+     key by key, so a receipt written beside a message never blanks its subject and
+     body - the message stays readable until it is deleted or four days pass. */
+  function ftMergeNotice(base, next) {
+    var out = Object.assign({}, base || {});
+    Object.keys(next || {}).forEach(function (k) {
+      var v = next[k];
+      if (v === null || v === undefined) return;
+      if ((k === 'readBy' || k === 'deletedBy') && typeof v === 'object') { out[k] = Object.assign({}, out[k] || {}, v); return; }
+      if (typeof v === 'string' && v === '' && out[k]) return;
+      out[k] = v;
+    });
+    return out;
+  }
   function ftInboxMerge() {
     var m = {};
-    if (ftInboxSrc.reg) Object.keys(ftInboxSrc.reg).forEach(function (k) { if (ftInboxSrc.reg[k]) m[k] = ftInboxSrc.reg[k]; });
-    if (ftInboxSrc.mirror) Object.keys(ftInboxSrc.mirror).forEach(function (k) { if (ftInboxSrc.mirror[k]) m[k] = ftInboxSrc.mirror[k]; });
+    if (ftInboxSrc.reg) Object.keys(ftInboxSrc.reg).forEach(function (k) { if (ftInboxSrc.reg[k]) m[k] = ftMergeNotice(null, ftInboxSrc.reg[k]); });
+    if (ftInboxSrc.mirror) Object.keys(ftInboxSrc.mirror).forEach(function (k) { if (ftInboxSrc.mirror[k]) m[k] = ftMergeNotice(m[k], ftInboxSrc.mirror[k]); });
     ftInboxCache = m;
     refreshBell();
   }
@@ -12525,6 +12540,7 @@ window.addEventListener('DOMContentLoaded', function() {
       if (ftInboxCache) Object.keys(ftInboxCache).forEach(function (k) { if (ftInboxCache[k]) inbox[k] = ftInboxCache[k]; });
       Object.keys(inbox).forEach(function (id) {
         var n = inbox[id] || {};
+        if (!n.subject && !n.message) return;
         var rc = receiptOf(id);
         if (rc.deletedAt) return;
         if (n.deletedBy && n.deletedBy[u.id]) return;
@@ -12785,19 +12801,27 @@ window.addEventListener('DOMContentLoaded', function() {
     var r = db(); if (!r || !isPA()) return {};
     var pd = PD(), ids = ftBizOrderIds(pd.businesses || {}), out = {};
     for (var i = 0; i < ids.length; i++) {
-      var kb = 0, failed = false;
+      var kb = 0, known = false;
       /* What the business publishes on its own beat. */
-      try { var f = await r.ref('businesses/' + ids[i] + '/meta/facts/usageKB').get(); kb = Number(f && f.val()) || 0; } catch (e) { kb = 0; }
-      /* And everything this platform administrator can read for the business, so
-         a business holding records is measured from what is really stored
-         instead of reading as 0 KB. Only a read that truly fails is reported as
-         unavailable, and a zero is never remembered as a measurement. */
       try {
-        var snap = await r.ref('businesses/' + ids[i]).get(); var v = snap && snap.val();
-        if (v) kb = Math.max(kb, JSON.stringify(v).length / 1024);
-      } catch (e) { failed = true; }
-      if (kb > 0) { out[ids[i]] = Math.round(kb * 1024); ftRememberBizKB(ids[i], Math.round(kb * 10) / 10); }
-      else out[ids[i]] = null;
+        var f = await r.ref('businesses/' + ids[i] + '/meta/facts/usageKB').get();
+        if (f && f.val() != null) { kb = Math.max(kb, Number(f.val()) || 0); known = true; }
+      } catch (e) {}
+      /* Everything this platform administrator can actually read for the business:
+         the business's own records where the rules allow it, and the administrator's
+         copy of them where they do not. A figure is shown as soon as any of these
+         can be read, so real stored data is never reported as unavailable. */
+      var paths = ['businesses/' + ids[i], 'atmos_platform_admin/businesses/' + ids[i]];
+      for (var j = 0; j < paths.length; j++) {
+        try {
+          var snap = await r.ref(paths[j]).get();
+          if (snap && snap.exists()) { kb = Math.max(kb, JSON.stringify(snap.val()).length / 1024); known = true; }
+        } catch (e) {}
+      }
+      /* The record this console already holds is a measurement too. */
+      try { var mine = (pd.businesses || {})[ids[i]]; if (mine) { kb = Math.max(kb, JSON.stringify(mine).length / 1024); known = true; } } catch (e) {}
+      out[ids[i]] = known ? Math.round(kb * 1024) : null;
+      if (kb > 0) ftRememberBizKB(ids[i], Math.round(kb * 10) / 10);
     }
     return out;
   }
@@ -13047,11 +13071,23 @@ function applyTrialDurationChange(prevDays, newDays) {
   return changed;
 }
 
+/* The plan, pricing category and amount this account is on, read from its own
+   stored record: the configured price for that plan in that category. */
+function applyStoredPlan(b, st) {
+  st.plan = PLAN_LABELS[b.subscriptionPlan] || 'Paid Subscription';
+  st.pricing = (b.subscriptionPricingType === 'introductory') ? 'Introductory Pricing' : 'Normal Pricing';
+  try {
+    var tier = (b.subscriptionPricingType === 'introductory') ? 'introductory' : 'normal';
+    var plan = (paPlans()[tier] || {})[b.subscriptionPlan] || null;
+    if (plan && plan.price != null && plan.price !== '') st.priceText = '\u20B9' + Number(plan.price);
+  } catch (e) {}
+}
+
 function getSubscriptionState() {
   var DAY = 86400000;
   var st = { registered: false, status: 'none', locked: false, daysLeft: 0, graceLeft: 0, totalDays: 0, trialDays: 0,
              message: '', messageColor: 'var(--text-muted)',
-             plan: '\u2014', pricing: '\u2014', expiryText: '\u2014' };
+             plan: '\u2014', pricing: '\u2014', priceText: '', expiryText: '\u2014' };
   var b = getCurrentBizRecord();
   if (!b) return st;
   st.registered = true;
@@ -13066,8 +13102,7 @@ function getSubscriptionState() {
 
   /* PAID subscription - the 3 day grace period runs only after a paid plan ends */
   if ((b.subscriptionStatus === 'active' || b.subscriptionStatus === 'grace') && b.subscriptionExpiry) {
-    st.plan = PLAN_LABELS[b.subscriptionPlan] || 'Paid Subscription';
-    st.pricing = (b.subscriptionPricingType === 'introductory') ? 'Introductory Pricing' : 'Normal Pricing';
+    applyStoredPlan(b, st);
     var paidEnd = Date.parse(b.subscriptionExpiry + 'T23:59:59+05:30');
     if (isNaN(paidEnd)) paidEnd = new Date(b.subscriptionExpiry).getTime();
     st.expiryText = istDateText(paidEnd);
@@ -13137,6 +13172,7 @@ function getSubscriptionState() {
 
   if (b.subscriptionStatus === 'expired') {
     st.status = 'expired'; st.locked = true;
+    if (b.subscriptionPlan) applyStoredPlan(b, st);
     st.message = 'Your subscription has ended. Kindly renew to restore operational access.';
     st.messageColor = 'var(--accent-rose)';
   }
@@ -13201,14 +13237,12 @@ function upiPayUri(amount) {
   function buildBizSubCardHtml() {
   var st = getSubscriptionState();
   var colors = { trial: '#800080', active: '#2E8B57', grace: '#DC2626', expired: '#8B0000', blocked: '#8B0000', none: 'var(--text-muted)' };
-  var labels = { trial: 'Trial Period', active: 'Subscription Active', grace: 'Grace Period', expired: 'Not Renewed', blocked: 'Blocked', none: 'Not Registered' };
+  var labels = { trial: 'Free Trial', active: 'Subscription Active', grace: 'Grace Period', expired: 'Subscription Expired', blocked: 'Blocked', none: 'Not Registered' };
   var c = colors[st.status] || 'var(--text-muted)';
   var l = labels[st.status] || 'Unknown';
   var isTrial = st.status === 'trial';
   var isPaid = st.status === 'active';
   var dLeft = (st.status === 'grace') ? (st.graceLeft || 0) : (st.daysLeft || 0);
-  var endingSoon = (st.status === 'active' || isTrial) && dLeft <= 5;
-  if (endingSoon && dLeft > 0) l = isTrial ? 'Trial Ending' : 'Subscription Ending';
   var periodText = (st.status === 'grace') ? 'in grace period' : (isTrial ? 'in trial period' : (isPaid ? 'in subscription period' : ((st.status === 'expired' || st.status === 'blocked') ? 'period expired' : 'not registered')));
   var dayCol = isTrial ? '#800080' : (isPaid ? (dLeft <= 5 ? '#F97316' : '#2E8B57') : (st.status === 'grace' ? '#DC2626' : ((st.status === 'expired' || st.status === 'blocked') ? '#8B0000' : 'var(--text-muted)')));
   var daysBox = '<div style="text-align:center;width:100%;min-width:100px;display:flex;flex-direction:column;align-items:center;justify-content:center">' +
@@ -13227,9 +13261,8 @@ function upiPayUri(amount) {
     + msg + counter
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'
     + '<span style="background:' + c + ';color:#fff;padding:4px 10px;border-radius:20px;font-size:.7rem;font-weight:800">' + l + '</span>'
-    + '<span style="' + pill + '">Trial: ' + (st.trialDays > 0 ? st.trialDays + ' days' : 'not offered') + '</span>'
-    + '<span style="' + pill + '">Paid: ' + st.plan + '</span>'
-    + '<span style="' + pill + '">Pricing: ' + st.pricing + '</span>'
+    + '<span style="' + pill + '">Plan: ' + st.plan + '</span>'
+    + '<span style="' + pill + '">Pricing: ' + st.pricing + (st.priceText ? ' \u00b7 ' + st.priceText : '') + '</span>'
     + (st.status === 'grace' ? '<span style="' + pill + '">Grace: ' + st.graceLeft + ' of ' + SUB_GRACE_DAYS + ' days</span>' : '')
     + '</div>'
     + '<button class="btn-admin" onclick="openPaSubmitPayment()" style="width:auto"><i class="fa-solid fa-qrcode"></i> Pay / Renew Subscription</button>'
@@ -14412,6 +14445,26 @@ if (typeof __ftSwitchTab === 'function') {
   F.maxTotal = function () { return Math.round((F.maxBalance() + F.firstDiscount) * 100) / 100; };
   F.account = null; F.accountBid = ''; F.introductions = {}; F.pendingKnown = false; F.bound = ''; F.bindings = [];
   F.failure = function (error) { alert('This change was not saved. ' + (error && error.message || error) + '\nIf Firebase reports permission denied, apply the updated Firebase rules provided with this file.'); };
+  /* The business administrator receives the same message on WhatsApp, addressed to
+     the mobile number registered on that business. The text opens ready to send. */
+  F.bizWhatsApp = function (bid, subject, message) {
+    var b = (platformData.businesses || {})[bid] || {};
+    var number = String(b.adminContact || '').replace(/\D/g, '');
+    if (number.length === 10) number = '91' + number;
+    else if (number.length === 11 && number.charAt(0) === '0') number = '91' + number.slice(1);
+    if (number.length < 10) return false;
+    var text = (subject ? subject + '\n\n' : '') + String(message || '');
+    var opened = null;
+    try { opened = window.open('https://wa.me/' + number + '?text=' + encodeURIComponent(text), '_blank'); } catch (e) { opened = null; }
+    return !!opened;
+  };
+  F.whatsAppNotice = function (bid, nid) {
+    if (!bid) return false;
+    var b = (platformData.businesses || {})[bid] || {};
+    var n = (b.inbox || {})[nid] || (platformData.notifications || {})[nid] || null;
+    if (!n || !n.message) return false;
+    return F.bizWhatsApp(bid, n.subject, n.message);
+  };
   F.randomCode = function () { var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', out; do { var a = new Uint8Array(14); crypto.getRandomValues(a); out = Array.from(a).filter(function (n) { return n < 252; }).slice(0,7).map(function (n) { return chars[n % 36]; }).join(''); } while (out.length !== 7 || !/[A-Z]/.test(out) || !/[0-9]/.test(out)); return out; };
   F.ensureAccount = async function (id, business) {
     var ref = F.ref('referralAccounts/' + id);
@@ -14466,7 +14519,7 @@ if (typeof __ftSwitchTab === 'function') {
   F.cell = function (content, extra) { return '<td style="padding:8px 10px;vertical-align:top;' + (extra || '') + '">' + content + '</td>'; };
   F.table = function (headers, rows, empty) {
     return '<div style="overflow:auto;max-height:236px;border:1px solid var(--border);border-radius:var(--radius-md)"><table style="width:100%;border-collapse:collapse;font-size:.78rem">'
-      + '<thead><tr>' + headers.map(function (h) { return '<th style="text-align:left;padding:8px 10px;font-size:.62rem;font-weight:900;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap">' + h + '</th>'; }).join('') + '</tr></thead>'
+      + '<thead><tr>' + headers.map(function (h) { return '<th style="text-align:left;padding:8px 10px;font-size:.62rem;font-weight:900;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;position:sticky;top:0;background:#fff;z-index:1">' + h + '</th>'; }).join('') + '</tr></thead>'
       + '<tbody>' + (rows.length ? rows.join('') : '<tr><td colspan="' + headers.length + '" style="text-align:center;padding:14px;color:var(--text-muted)">' + empty + '</td></tr>') + '</tbody></table></div>';
   };
   /* Opened from the feature search: make sure the card exists, is filled and is
@@ -14768,11 +14821,25 @@ if (typeof __ftSwitchTab === 'function') {
     if (busy || !platformAdminUser || !paCurrentPaymentId) return; var amount = Number(F.el('ftVerifiedAmount').value), days = Number(F.el('ftApprovedDays').value);
     if (F.el('ftVerifiedAmount').value === '' || !Number.isFinite(amount) || amount < 0 || [30,90,182,365].indexOf(days)<0) return alert('Enter a valid verified amount and approved duration.');
     if (!confirm('Approve the verified payment of ₹' + amount.toFixed(2) + ' and add ' + days + ' days?')) return;
-    busy = true; try { await F.commit({paymentId:paCurrentPaymentId,id:'PAY-' + paCurrentPaymentId + '-' + (platformData.payments[paCurrentPaymentId].submittedAt || 0),amount:Math.round(amount*100)/100,days:days}); closePaPaymentModal(); renderPlatformAdminViews(); alert('Payment approved and saved. Subscription extended once and the business administrator notified.'); } catch(e) { F.failure(e); } finally { busy=false; }
+    busy = true; try {
+      var pid = paCurrentPaymentId, bid = (platformData.payments[pid] || {}).businessId;
+      var nid = 'PAY-' + pid + '-' + ((platformData.payments[pid] || {}).submittedAt || 0);
+      await F.commit({paymentId:pid,id:nid,amount:Math.round(amount*100)/100,days:days});
+      closePaPaymentModal(); renderPlatformAdminViews();
+      var wa = F.whatsAppNotice(bid, 'decision_' + nid);
+      alert('Payment approved and saved. Subscription extended once and the business administrator notified.' + (wa ? '\n\nThe same message is open in WhatsApp - tap Send to deliver it to the business administrator.' : '\n\nAllow pop-ups to send the same message to the business administrator on WhatsApp, or use the WhatsApp button beside this business.'));
+    } catch(e) { F.failure(e); } finally { busy=false; }
   };
   rejectPayment = async function () {
     if (busy || !platformAdminUser || !paCurrentPaymentId) return; var reason = F.el('paRejectReason').value.trim(); if (!reason) return alert('Enter the rejection reason.'); busy=true;
-    try { await F.commit({paymentId:paCurrentPaymentId,id:'REJECT-' + paCurrentPaymentId + '-' + (platformData.payments[paCurrentPaymentId].submittedAt || 0),reject:true,reason:reason}); closePaPaymentModal(); renderPlatformAdminViews(); alert('Rejection saved. The business administrator has been notified and can submit a corrected request.'); } catch(e) { F.failure(e); } finally { busy=false; }
+    try {
+      var pid = paCurrentPaymentId, bid = (platformData.payments[pid] || {}).businessId;
+      var nid = 'REJECT-' + pid + '-' + ((platformData.payments[pid] || {}).submittedAt || 0);
+      await F.commit({paymentId:pid,id:nid,reject:true,reason:reason});
+      closePaPaymentModal(); renderPlatformAdminViews();
+      var wa = F.whatsAppNotice(bid, 'decision_' + nid);
+      alert('Rejection saved. The business administrator has been notified and can submit a corrected request.' + (wa ? '\n\nThe same message is open in WhatsApp - tap Send to deliver it to the business administrator.' : '\n\nAllow pop-ups to send the same message to the business administrator on WhatsApp, or use the WhatsApp button beside this business.'));
+    } catch(e) { F.failure(e); } finally { busy=false; }
   };
   window.ftGrantManualSubscription = async function () { if (busy || !platformAdminUser) return; var bid=F.el('ftManualBusiness').value, days=Number(F.el('ftManualDays').value); if (!bid || !confirm('Manually add '+days+' subscription days to this business?')) return; busy=true; try { await F.commit({businessId:bid,days:days,amount:0}); renderPlatformAdminViews(); alert('Manual subscription saved separately from paid subscriptions. The administrator has been notified.'); } catch(e) { F.failure(e); } finally { busy=false; } };
   window.ftSaveReferralSettings = async function () {
@@ -14821,15 +14888,17 @@ if (typeof __ftSwitchTab === 'function') {
   F.renderReferralRecords = function () {
     var host = F.el('ftPlatformReferrals'); if (!host) return;
     var accounts = platformData.referralAccounts || {}, businesses = platformData.businesses || {};
-    var ids = (window.ftBizOrderIds ? ftBizOrderIds(businesses) : Object.keys(businesses)).filter(function (id) { return accounts[id]; });
-    var now = Date.now();
+    /* Every registered business is listed, not only the ones that already hold a
+       referral entry, and every one of them carries the same allowance of three. */
+    var ids = (window.ftBizOrderIds ? ftBizOrderIds(businesses) : Object.keys(businesses));
+    var now = Date.now(), cap = F.referralCapacity;
     var rows = ids.map(function (id) {
       var r = accounts[id] || {}, b = businesses[id] || {}, claim = r.claim || {};
       var done = Object.values(r.referrals || {}).filter(function (x) { return x.success; }).length;
-      var cap = F.limit(b, now), from = claim.businessId ? (businesses[claim.businessId] || {}) : null;
+      var from = claim.businessId ? (businesses[claim.businessId] || {}) : null;
       return '<tr style="border-top:1px solid var(--border)">'
         + F.cell(F.esc(b.name || id) + '<div style="font-size:.68rem;font-family:monospace;color:var(--text-muted)">' + F.esc(b.displayId || id) + '</div>', 'font-weight:700')
-        + F.cell(F.esc(r.code || '-'), 'font-family:monospace')
+        + F.cell(F.esc(r.code || 'not generated yet'), 'font-family:monospace')
         + F.cell(from ? F.esc(from.name || claim.businessId) + '<div style="font-size:.68rem;font-family:monospace;color:var(--text-muted)">' + F.esc(claim.code || '') + '</div>' : 'No referring business linked')
         + F.cell(done + ' / ' + cap, 'font-weight:800')
         + F.cell(String(Math.max(0, cap - done)))
@@ -14838,7 +14907,7 @@ if (typeof __ftSwitchTab === 'function') {
         + '</tr>';
     });
     host.innerHTML = '<p style="font-size:.76rem;color:var(--text-muted);line-height:1.6;margin-bottom:8px">Every business holds one referral ID. A business can count at most ' + F.referralCapacity + ' successful referrals, each earning ' + F.reward() + '% credit for the referring business, so the most any business can earn is ' + F.maxBalance() + '%. The referred business receives the one-time ' + F.firstDiscount + '% discount on its first paid subscription, whichever plan it buys first. "Successful" means the referred business activated a paid subscription while the referring business held an active subscription.</p>'
-      + F.table(['Business','Referral ID','Referred by','Referrals who subscribed','Referrals still available','Earned balance','First-subscription discount'], rows, 'No referral accounts yet.');
+      + F.table(['Business','Referral ID','Referred by','Referrals who subscribed','Referrals still available','Earned balance','First-subscription discount'], rows, 'No businesses registered yet.');
   };
   var __settingsRender = renderPASettings;
   renderPASettings = function () {
