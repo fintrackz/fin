@@ -14585,7 +14585,7 @@ if (typeof __ftSwitchTab === 'function') {
     var d = F.discount(def.price);
     F.el('paPayAmount').value = d.final;
     if (F.el('ftPaySubscriptionPrice')) F.el('ftPaySubscriptionPrice').value = '₹' + d.original.toFixed(2);
-    if (F.el('ftPayFinalPayable')) F.el('ftPayFinalPayable').value = '₹' + d.final.toFixed(2);
+    if (F.el('ftPayFinalPayable')) { F.el('ftPayFinalPayable').value = '₹' + d.final.toFixed(2); var payableGroup = F.el('ftPayFinalPayable').closest('.form-group'); if (payableGroup) payableGroup.style.display = d.pct > 0 ? 'block' : 'none'; }
     var parts = []; if (d.first > 0) parts.push('one-time first-subscription ' + d.first + '%'); if (d.credits > 0) parts.push('referral credit ' + d.credits + '%');
     var group = F.el('ftPayDiscountGroup'), note = F.el('ftPayNoDiscount'), box = F.el('ftPayDiscount');
     if (d.pct > 0) {
@@ -14612,10 +14612,14 @@ if (typeof __ftSwitchTab === 'function') {
       /* The deployed Firebase rules validate the pending-request shape with these
          two marker fields; no image is attached and nothing is uploaded. */
       var record = { businessId:id,businessName:b.name||'',businessDisplayId:b.displayId||'',plan:plan,pricingType:pt,paymentMethod:method,mobile:mobile,amount:discount.final,originalAmount:discount.original,discountPct:discount.pct,discountAmount:discount.amount,referralFirstDiscount:discount.first,referralCreditsUsed:discount.credits,screenshotDelivery:'whatsapp',screenshotConfirmed:true,status:'pending',submittedAt:firebase.database.ServerValue.TIMESTAMP };
-      var result = await F.ref('payments/REQ-' + id).transaction(function (p) { if (p) return; return record; }, undefined, false);
-      if (!result.committed) throw new Error(duplicate);
+      /* A transaction reads the request slot before writing, but the deployed
+         rules grant that read only after a record exists there, so a first
+         request was refused. A direct write needs no read, and the rules'
+         "!data.exists()" guard still prevents a duplicate request. */
+      await F.ref('payments/REQ-' + id).set(record);
       platformData.payments = platformData.payments || {};
-      platformData.payments['REQ-' + id] = result.snapshot.val();
+      var local = Object.assign({}, record); local.submittedAt = Date.now();
+      platformData.payments['REQ-' + id] = local;
       var msg = 'PAYMENT VERIFICATION REQUEST\n'
         + '--------------------------------\n'
         + 'Business ID: ' + (b.displayId || id) + '\n'
@@ -14624,7 +14628,7 @@ if (typeof __ftSwitchTab === 'function') {
         + 'Pricing Type: ' + (pt === 'introductory' ? 'Introductory Pricing' : 'Normal Pricing') + '\n'
         + 'Subscription Price: Rs ' + discount.original.toFixed(2) + '\n'
         + (discount.pct > 0 ? 'Applied Discount: ' + discount.pct + '% (Rs ' + discount.amount.toFixed(2) + ')\n' : '')
-        + 'Final Payable Amount: Rs ' + discount.final.toFixed(2) + '\n'
+        + (discount.pct > 0 ? 'Final Payable Amount: Rs ' + discount.final.toFixed(2) + '\n' : '')
         + 'Amount Paid: Rs ' + discount.final.toFixed(2) + '\n'
         + 'Payment Method: ' + method + '\n'
         + 'Payment Mobile Number: ' + mobile + '\n'
@@ -14637,7 +14641,11 @@ if (typeof __ftSwitchTab === 'function') {
       F.el('paPayMethod').value = '';
       renderBizSubscriptionCard(); ftRenderAccessLock();
       alert('Your verification request has been recorded and is now pending with the Platform Administrator.\n\nWhatsApp has opened with the prepared message \u2014 you must tap Send in WhatsApp so the administrator receives it.\n\nYour subscription is activated once the administrator verifies this payment.');
-    } catch (e) { F.failure(e); }
+    } catch (e) {
+      if (e && /permission_denied/i.test(String(e.message || e.code || e))) {
+        alert('Firebase rejected this request. Check these in order:\n\n1) Publish the updated Firebase rules from this file (Firebase console, Realtime Database, Rules: paste and Publish). Older rules still expect a payment screenshot and reject this request format.\n\n2) Sign in with the administrator account that registered this business. The business record must list that account as its administrator.\n\n3) If an earlier request from this business was already recorded or rejected, ask the platform administrator to delete that old request so a fresh one can be submitted.');
+      } else F.failure(e);
+    }
     finally { busy = false; if (button) button.disabled = false; }
   };
   /* Retired screenshot/base64 path cannot be invoked from an old control. */
