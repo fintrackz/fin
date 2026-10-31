@@ -3285,10 +3285,10 @@ html, body { background-color: transparent !important; background-image: none !i
 <h3 style="font-size:1.1rem;font-weight:800;margin-bottom:16px">Payment Verification</h3>
 <div id="paPaymentDetail"></div>
 <div class="form-group" id="paRejectReasonGroup" style="display:none"><label>Rejection Reason (the business admin will see this)</label><textarea id="paRejectReason" rows="2" placeholder="Type why this payment is rejected and what the business should do"></textarea></div>
-<div style="display:flex;gap:10px;margin-top:16px">
+<div id="paPayStatus" style="display:none;margin-top:12px;padding:10px 12px;border-radius:var(--radius-md);font-size:.8rem;font-weight:700;line-height:1.5"></div><div style="display:flex;gap:10px;margin-top:16px">
 <button style="flex:1;background:var(--bg);color:var(--text-muted)" onclick="closePaPaymentModal()">Close</button>
 <button style="flex:1" class="btn-danger" id="paRejectBtn" onclick="rejectPayment()">Reject</button>
-<button style="flex:1" class="btn-primary" id="paApproveBtn" onclick="approvePayment()" style="background:var(--accent-green)"><i class="fa-solid fa-check"></i> Approve & Activate</button>
+<button style="flex:1;background:var(--accent-green)" class="btn-primary" id="paApproveBtn" onclick="approvePayment()"><i class="fa-solid fa-check"></i> Approve & Activate</button>
 </div>
 </div>
 </div>
@@ -9117,18 +9117,7 @@ function ftBizOrderIds(map) {
   });
 }
 
-/* The next Business ID number for a business that is registering now. The public
-   sign-in index carries one routing entry per registered business, so the number
-   of businesses already listed plus one is this business's place in the sequence.
-   Returns 0 when it cannot be read, and the platform console then assigns it. */
-async function ftNextBusinessNumber() {
-  try {
-    var snap = await firebase.database().ref('atmos_signin_index').once('value');
-    var val = snap.val() || {}, seen = {};
-    Object.keys(val).forEach(function (k) { var b = (val[k] || {}).b; if (b) seen[b] = true; });
-    return Object.keys(seen).length + 1;
-  } catch (e) { return 0; }
-}
+/* Atomic FT-number allocation is supplied by the business lifecycle module. */
 
 /* The size each business has really used, in KB, as measured from its records. */
 window.ftBizKB = window.ftBizKB || {};
@@ -9597,7 +9586,7 @@ async function ftOwnedBusiness(identity) {
   var id = (mapping && mapping.b) || (claim && claim.b) || (route && route.b);
   if (!id) return null;
   var snapshot = await firebase.database().ref('atmos_platform_admin/businesses/' + id).once('value');
-  var record = snapshot.val();
+  var record = snapshot.val(); if (!record) return null;
     if (record && record.adminEmail && ftEmail(record.adminEmail) !== ftEmail(identity.email)) throw new Error('This email is not the administrator of that business.');
   if (record && record.adminUid !== identity.uid) { try { await firebase.database().ref('atmos_platform_admin/businesses/' + id + '/adminUid').set(identity.uid); } catch (e) {} }
   return { id: id, record: record };
@@ -9720,13 +9709,13 @@ function listenOwnBusinessRecord() {
     var ref = firebase.database().ref('atmos_platform_admin/businesses/' + authBusinessId);
     ref.on('value', function (snap) {
       var v = snap.val();
-      if (!v) { try { ensureOwnRegistryRecord(); } catch (e) {} return; }
+      if (!v) { appLogout(); return; }
       if (!platformData.businesses) platformData.businesses = {};
       platformData.businesses[authBusinessId] = v;
       try { renderBizSubscriptionCard(); checkSubscriptionLock(); } catch (e) {}
       if (window.ftSubscriptionReady) window.ftSubscriptionReady();
       try { adoptRegisteredBusinessName(v); } catch (e) {}
-    }, function () { if (window.ftSubscriptionCheckFailed) window.ftSubscriptionCheckFailed(); });
+    }, function (error) { if (/permission.denied/i.test(String(error && error.code))) { appLogout(); return; } if (window.ftSubscriptionCheckFailed) window.ftSubscriptionCheckFailed(); });
     scopedPlatformRefs.push(ref);
   } catch (e) {}
 }
@@ -9764,23 +9753,7 @@ function platformAdminEmail() {
 }
 
 /* SAVE PLATFORM DATA TO FIREBASE */
-function savePlatformData() {
-  /* The shared node is written only by the Main Platform Administrator. */
-  if (!platformAdminUser) { try { ftIsPlatformAdmin(); } catch (e) {} }
-  if (platformAdminUser && platformDbRef && platformSyncActive) {
-    mirrorPublicPlatformSlice();
-    return platformDbRef.set(platformData).catch(function(err) { console.error('Platform sync error:', err); });
-  }
-  /* A business administrator writes only their own business's registry record. */
-  if (authBusinessId && platformData.businesses && platformData.businesses[authBusinessId]) {
-    try {
-      return firebase.database().ref('atmos_platform_admin/businesses/' + authBusinessId)
-        .update(platformData.businesses[authBusinessId])
-        .catch(function(err) { console.error('Business registry sync error:', err); });
-    } catch (e) { return Promise.resolve(); }
-  }
-  return Promise.resolve();
-}
+function savePlatformData() { return ftPersistPlatformData(); }
 
 /* Staff sign-in must work on a device where nobody (not even the business
    administrator) has ever logged in. The account directory is a small public
@@ -10395,7 +10368,7 @@ function renderPABusinesses() {
     tr.onclick = function() { openBusinessProfile(b.id); };
     tr.innerHTML =
       '<td><strong>'+(b.name||'-')+'</strong>'+(b.blocked?' <span class="pa-badge pa-badge-blocked">Blocked</span>':'')+'</td>'+
-      '<td style="font-size:.78rem"><strong style="font-family:monospace">'+(b.displayId||'-')+'</strong></td>'+
+      '<td style="font-size:.78rem"><strong style="font-family:monospace">'+(ftBusinessId(b.id, b.displayId))+'</strong></td>'+
       '<td>'+(b.category||'-')+'</td>'+
       '<td>'+(b.joiningDate||'-')+'</td>'+
       '<td>'+(b.adminName||'-')+'</td>'+
@@ -10488,7 +10461,7 @@ function openBusinessProfile(bizId) {
     '<div class="app-card"><button class="pa-link" onclick="switchPATab(\'paBusinessesTab\')" style="margin-bottom:12px"><i class="fa-solid fa-arrow-left"></i> Back to Directory</button>'+
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:16px">'+
     '<div><h2 style="font-size:1.4rem;font-weight:900;color:var(--atmos-navy)">'+(b.name||'-')+'</h2>'+
-    '<p style="font-size:.82rem;color:var(--text-muted);margin-top:4px">Business ID: <code style="background:var(--bg);padding:2px 6px;border-radius:4px;font-weight:800">'+(b.displayId||'-')+'</code></p></div>'+
+    '<p style="font-size:.82rem;color:var(--text-muted);margin-top:4px">Business ID: <code style="background:var(--bg);padding:2px 6px;border-radius:4px;font-weight:800">'+(ftBusinessId(b.id, b.displayId))+'</code></p></div>'+
     '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
     '<button class="btn-primary" onclick="blockBusiness(\''+bizId+'\')" style="width:auto;padding:6px 14px;font-size:.8rem;background:'+(b.blocked?'var(--accent-green)':'var(--accent-rose)')+'">'+(b.blocked?'<i class="fa-solid fa-unlock"></i> Unblock':'<i class="fa-solid fa-ban"></i> Block')+'</button>'+
     '<button class="btn-danger" onclick="deleteBusiness(\''+bizId+'\')" style="padding:6px 14px;font-size:.8rem"><i class="fa-solid fa-trash"></i> Delete</button></div></div>'+
@@ -10671,14 +10644,14 @@ function upsertCurrentBusinessRecord() {
   return bizId;
 }
 
-function registerCurrentBusiness() {
+async function registerCurrentBusiness() {
   if (!appData || !appData.users) return alert('No business data found.');
   var existed = !!getCurrentPlatformBusinessId();
   var bizId = upsertCurrentBusinessRecord();
-  savePlatformData();
+  await savePlatformData(); await ftEnsureBusinessIds();
   alert(existed
-    ? 'This business is already registered — its details have been updated.\nBusiness ID: ' + bizId
-    : 'Current business registered with platform!\nBusiness ID: ' + bizId + '\n' + trialActivatedMessage());
+    ? 'This business is already registered — its details have been updated.\nBusiness ID: ' + ftBusinessId(bizId)
+    : 'Current business registered with platform!\nBusiness ID: ' + ftBusinessId(bizId) + '\n' + trialActivatedMessage());
   renderPlatformAdminViews();
 }
 
@@ -10689,7 +10662,7 @@ function togglePaNewBizCustomCategory() {
   if (wrap && sel) wrap.style.display = sel.value === 'Custom' ? 'block' : 'none';
 }
 
-function addNewBusiness() {
+async function addNewBusiness() {
   var name = document.getElementById('paNewBizName').value.trim();
   var category = document.getElementById('paNewBizCategory').value;
   var paCustomCat = (document.getElementById('paNewBizCustomCategory') || {}).value || '';
@@ -10708,8 +10681,7 @@ function addNewBusiness() {
     trialEndDate: trialEnd, subscriptionExpiry: '', lastActivity: 0, isCurrentBusiness: false
   };
   try { ftSendWelcomeNotification(bizId); platformData.businesses[bizId].welcomeSentAt = Date.now(); } catch (e) {}
-  savePlatformData();
-  alert('Business registered successfully!\nBusiness ID: ' + bizId + '\n' + trialActivatedMessage());
+  await savePlatformData(); await ftEnsureBusinessIds(); alert('Business registered successfully!\nBusiness ID: ' + ftBusinessId(bizId) + '\n' + trialActivatedMessage());
   closePaAddBizModal();
   document.getElementById('paNewBizName').value = '';
   document.getElementById('paNewBizAdmin').value = '';
@@ -10753,66 +10725,7 @@ function revokeTenantClaims(bizId) {
   }).catch(function (e) { console.error('Access revocation failed:', e); });
 }
 
-/* SAFE PER-BUSINESS DELETION — Platform Administrator only.
-   Targets exactly one business by its unique ID: its registry record, its
-   billing entries and the sign-in access of its own members. It never issues a
-   broad delete against a shared path, never touches another business's records,
-   and retains this business's own data node so nothing is destroyed irreversibly.
-   An audit record is kept for every deletion. */
-function deleteBusiness(bizId) {
-  if (!platformAdminUser) { alert('Only the Main Platform Administrator can delete a business.'); return; }
-  bizId = normalizeBizId(bizId);
-  var businesses = platformData.businesses || {};
-  var rec = businesses[bizId];
-  if (!bizId || !rec) { alert('That business could not be found. The list will be refreshed.'); renderPlatformAdminViews(); return; }
-  var others = Object.keys(businesses).filter(function (k) { return k !== bizId; });
-
-  var typed = window.prompt(
-    'DELETE ONE BUSINESS\n\n' +
-    'Business name : ' + (rec.name || '(no name)') + '\n' +
-    'Business ID   : ' + (rec.displayId || '-') + '\n' +
-    'Other businesses that will NOT be modified: ' + others.length + '\n\n' +
-    'Sign-in access for this business will be revoked and an audit record kept.\n' +
-    'Its own stored records are retained, not destroyed.\n\n' +
-    'Type the Business ID ' + (rec.displayId || '-') + ' to confirm:', '');
-  if (typed === null) return;
-  if (!rec.displayId) { alert('This business has no Business ID yet. Open the Platform Console once to assign it, then try again.'); return; }
-  var typedKey = String(typed).trim().toLowerCase(); var okId = String(rec.displayId).trim().toLowerCase(); if (typedKey !== okId) { alert('The confirmation did not match the Business ID ' + rec.displayId + '. Nothing was deleted.'); return; }
-
-  var audit = {
-    businessId: bizId,
-    name: rec.name || '',
-    deletedAt: Date.now(),
-    deletedBy: (platformAdminUser && (platformAdminUser.email || platformAdminUser.name)) || 'platform-administrator',
-    otherBusinessesUntouched: others.length,
-    recordsRetained: true
-  };
-
-  /* Change the in-memory registry first, then write it once. */
-  platformData.archive = platformData.archive || {};
-  platformData.archive[bizId] = Object.assign({}, rec, audit);
-  delete platformData.businesses[bizId];
-  if (platformData.payments) {
-    Object.keys(platformData.payments).forEach(function (k) {
-      if (platformData.payments[k] && platformData.payments[k].businessId === bizId) delete platformData.payments[k];
-    });
-  }
-  if (platformData.presence) delete platformData.presence[bizId];
-
-  revokeTenantClaims(bizId).then(function () {
-    return savePlatformData();
-  }).then(function () {
-    alert('Deleted "' + (rec.name || bizId) + '".\n\n' +
-      others.length + ' other business(es) were not modified.\n' +
-      'Sign-in access for this business has been revoked and an audit record was kept.');
-    switchPATab('paBusinessesTab');
-    renderPlatformAdminViews();
-  }).catch(function (e) {
-    console.error('Business deletion failed:', e);
-    alert('Deletion could not be completed. Nothing was destroyed and the list has been refreshed. Please try again.');
-    renderPlatformAdminViews();
-  });
-}
+/* Permanent, atomic deletion is implemented by the business lifecycle module. */
 
 /* ===== SUBSCRIPTIONS ===== */
 function renderPASubscriptions() {
@@ -11042,7 +10955,7 @@ function renderPANotifications() {
     ftBizOrderIds(businesses).forEach(function(k) {
       var b = businesses[k];
       var opt = document.createElement('option');
-      opt.value = k; opt.innerText = b.name || k;
+      opt.value = k; opt.innerText = b.name || ftBusinessId(k);
       bizSelect.appendChild(opt);
     });
   }
@@ -11058,7 +10971,7 @@ function renderPANotifications() {
           ftBizOrderIds(platformData.businesses||{}).forEach(function(k) {
             var b = platformData.businesses[k];
             var opt = document.createElement('option');
-            opt.value = k; opt.innerText = b.name || k;
+            opt.value = k; opt.innerText = b.name || ftBusinessId(k);
             sel.appendChild(opt);
           });
         }
@@ -11227,7 +11140,7 @@ function renderPAReports() {
   bizArr.forEach(function(b) {
     var usage = calculateBizDataUsage(b);
     if (usage.currentKB/1024 > (limits.storageWarningThresholdMB||500)*0.9) {
-      warnings += '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-md);padding:10px 14px;margin-bottom:8px"><i class="fa-solid fa-database" style="color:#92400e"></i> <strong style="color:#92400e">Storage warning:</strong> '+(b.name||b.id)+' is using '+(usage.currentKB/1024).toFixed(1)+' MB (threshold: '+limits.storageWarningThresholdMB+' MB).</div>';
+      warnings += '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-md);padding:10px 14px;margin-bottom:8px"><i class="fa-solid fa-database" style="color:#92400e"></i> <strong style="color:#92400e">Storage warning:</strong> '+(b.name||ftBusinessId(b.id))+' is using '+(usage.currentKB/1024).toFixed(1)+' MB (threshold: '+limits.storageWarningThresholdMB+' MB).</div>';
     }
   });
   if (!warnings) warnings = '<div style="text-align:center;color:var(--text-muted);padding:12px"><i class="fa-solid fa-circle-check" style="color:var(--accent-green)"></i> No warnings. All within configured limits.</div>';
@@ -11599,7 +11512,7 @@ function doSubmitPayment(plan, pricingType, txnId, amount, screenshotUrl, mobile
     var msg = 'PAYMENT VERIFICATION REQUEST\n'
       + '--------------------------------\n'
       + 'Business: ' + (b.name || '-') + '\n'
-      + 'Business ID: ' + (b.displayId || '-') + '\n'
+      + 'Business ID: ' + (ftBusinessId(b.id, b.displayId)) + '\n'
       + 'Plan: ' + (PLAN_LABELS[plan] || plan) + '\n'
       + 'Pricing Type: ' + (pricingType === 'introductory' ? 'Introductory Pricing' : 'Normal Pricing') + '\n'
       + 'Amount Paid: Rs ' + amount + '\n'
@@ -11936,7 +11849,7 @@ async function submitBusinessRegistration() {
     var identity = credential.user;
     if (ftBootstrap && ftBootstrap.uid === identity.uid) throw new Error('The platform administrator cannot register as a business administrator.');
     var owned = await ftOwnedBusiness(identity);
-    var proposedId = owned ? owned.id : 'BIZ-' + identity.uid;
+    var proposedId = owned ? owned.id : firebase.database().ref('businesses').push().key;
     var mapResult = await ftOwnerMapRef(identity.uid).transaction(function (current) {
       return current || { b: proposedId, email: email, createdAt: Date.now() };
     }, undefined, false);
@@ -11947,9 +11860,8 @@ async function submitBusinessRegistration() {
       if (route && route.b !== bizId) throw new Error('This email or mobile is already linked to another business. Use its login or enter a different mobile number.');
     });
     var branding = getPlatformBranding();
-    /* The Business ID is the position in the registration order: FT-001, FT-002 ...
-       and it never changes once it is given. */
-    var displayNumber = await ftNextBusinessNumber();
+    /* Atomic allocation is retained across retries and never reuses retired IDs. */
+    var displayNumber = await ftNextBusinessNumber(bizId);
     var newRecord = { name: name, category: category === 'Custom' ? customCategory : category, motto: motto, adminName: adminName, adminContact: mobile, adminEmail: email, adminUid: identity.uid, joiningDate: getISTDateStr(), referralRegisteredAt: firebase.database.ServerValue.TIMESTAMP, staffCount: 0, blocked: false, subscriptionStatus: 'trial', trialEndDate: Date.parse(getISTDateStr() + 'T00:00:00+05:30') + (branding.trialDays * 86400000), subscriptionExpiry: '', lastActivity: Date.now(), isCurrentBusiness: false };
     if (displayNumber) newRecord.displayId = 'FT-' + String(displayNumber).padStart(3, '0');
     var registryResult = await firebase.database().ref('atmos_platform_admin/businesses/' + bizId).transaction(function (current) {
@@ -12555,12 +12467,12 @@ window.addEventListener('DOMContentLoaded', function() {
       Object.keys(pd.payments || {}).forEach(function (k) {
         var p = pd.payments[k] || {};
         if (p.status !== 'pending') return;
-        out.push({ id: 'pay_' + k, subject: 'Subscription payment awaiting verification', message: (p.businessName || ((pd.businesses || {})[p.businessId] || {}).name || p.businessId || 'A business') + ' submitted ' + money(p.amount) + ' for approval.', sender: 'System', role: 'System', at: Number(p.submittedAt || p.sentAt || 0), scope: 'sys' });
+        out.push({ id: 'pay_' + k, subject: 'Subscription payment awaiting verification', message: (p.businessName || ((pd.businesses || {})[p.businessId] || {}).name || ftBusinessId(p.businessId, p.businessDisplayId)) + ' submitted ' + money(p.amount) + ' for approval.', sender: 'System', role: 'System', at: Number(p.submittedAt || p.sentAt || 0), scope: 'sys' });
       });
       Object.keys(pd.businesses || {}).forEach(function (k) {
         var b = pd.businesses[k] || {};
         if (!(b.registrationStatus === 'pending' || b.verified === false)) return;
-        out.push({ id: 'reg_' + k, subject: 'Business registration awaiting verification', message: (b.name || k) + ' has registered and needs review.', sender: 'System', role: 'System', at: Number(b.registeredAt || 0), scope: 'sys' });
+        out.push({ id: 'reg_' + k, subject: 'Business registration awaiting verification', message: (b.name || ftBusinessId(k)) + ' has registered and needs review.', sender: 'System', role: 'System', at: Number(b.registeredAt || 0), scope: 'sys' });
       });
       out.forEach(function (n) { n.readAt = Number(ls['sys_' + n.id]) || 0; if (ls['delsys_' + n.id]) n.hidden = true; });
       out = out.filter(function (n) { return !n.hidden; });
@@ -12778,7 +12690,7 @@ window.addEventListener('DOMContentLoaded', function() {
     var pd = PD(), h = '';
     ftBizOrderIds(pd.businesses || {}).forEach(function (k) {
       var b = pd.businesses[k] || {};
-      h += '<label style="display:flex;gap:8px;align-items:center;padding:4px 2px;font-size:.8rem"><input type="checkbox" class="ftAnnBiz" value="' + k + '"> ' + escapeHtml(b.name || k) + (b.displayId ? ' <span style="color:var(--text-muted)">(' + b.displayId + ')</span>' : '') + '</label>';
+      h += '<label style="display:flex;gap:8px;align-items:center;padding:4px 2px;font-size:.8rem"><input type="checkbox" class="ftAnnBiz" value="' + k + '"> ' + escapeHtml(b.name || ftBusinessId(k)) + (b.displayId ? ' <span style="color:var(--text-muted)">(' + b.displayId + ')</span>' : '') + '</label>';
     });
     return h || '<div style="color:var(--text-muted);font-size:.8rem">No businesses yet.</div>';
   }
@@ -12893,29 +12805,8 @@ window.addEventListener('DOMContentLoaded', function() {
     return { label: labels[st] || 'Unknown', color: colors[st] || 'var(--text-muted)', detail: detail };
   }
 
-  /* A business keeps the Business ID it was given. Only the ones still without a
-     number are filled in, and they are filled in registration order with the
-     lowest numbers nobody holds yet - so the 7th business registered is FT-007. */
-  function ensureDisplayIds() {
-    var pd = PD(), bl = pd.businesses || {}, changed = false, used = {};
-    Object.keys(bl).forEach(function (k) { var m = /^FT-(\d+)$/.exec((bl[k] || {}).displayId || ''); if (m) used[Number(m[1])] = true; });
-    var missing = Object.keys(bl).filter(function (k) { return !/^FT-(\d+)$/.test((bl[k] || {}).displayId || ''); });
-    missing.sort(function (a, b) {
-      var ra = Number((bl[a] || {}).referralRegisteredAt) || 0, rb = Number((bl[b] || {}).referralRegisteredAt) || 0;
-      if (ra !== rb) return ra - rb;
-      var ja = Date.parse((bl[a] || {}).joiningDate || '') || 0, jb = Date.parse((bl[b] || {}).joiningDate || '') || 0;
-      if (ja !== jb) return ja - jb;
-      return String(a) < String(b) ? -1 : 1;
-    });
-    var next = 1;
-    missing.forEach(function (k) {
-      while (used[next]) next++;
-      bl[k].displayId = 'FT-' + String(next).padStart(3, '0');
-      used[next] = true; next++; changed = true;
-    });
-    if (changed) { pd.idCounter = Math.max(Number(pd.idCounter) || 0, next - 1); try { if (typeof savePlatformData === 'function') savePlatformData(); } catch (e) {} }
-    return changed;
-  }
+  /* The lifecycle module assigns IDs atomically, without filling retired gaps. */
+  function ensureDisplayIds() { return ftEnsureBusinessIds().catch(function (error) { console.error('Business ID assignment failed:', error); }); }
 
   async function measureStorage() {
     var r = db(); if (!r || !isPA()) return {};
@@ -12956,7 +12847,7 @@ window.addEventListener('DOMContentLoaded', function() {
       var s = subInfo(b), pr = (typeof ftPresenceInfo === 'function') ? ftPresenceInfo(pres[b.id] || {}) : (pres[b.id] || {});
       var stored = ftStorageCache ? bytes(ftStorageCache[b.id]) : '<span style="color:var(--text-muted)">Measuring...</span>';
       return '<tr>' +
-        '<td><strong>' + escapeHtml(b.name || b.id) + '</strong><div style="font-size:.7rem;color:var(--text-muted)">' + (b.displayId || '-') + '</div></td>' +
+        '<td><strong>' + escapeHtml(b.name || ftBusinessId(b.id)) + '</strong><div style="font-size:.7rem;color:var(--text-muted)">' + (ftBusinessId(b.id, b.displayId)) + '</div></td>' +
         '<td style="font-size:.78rem">' + escapeHtml(b.adminName || '-') + '<div style="font-size:.7rem;color:var(--text-muted)">' + escapeHtml(b.adminContact || b.adminEmail || '-') + '</div></td>' +
         '<td><span style="background:' + s.color + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:.68rem;font-weight:800">' + s.label + '</span><div style="font-size:.7rem;color:var(--text-muted);margin-top:4px;line-height:1.45">' + (s.detail.join('<br>') || '-') + '</div></td>' +
         '<td style="font-size:.78rem">' + (b.staffCount || 0) + '</td>' +
@@ -14609,7 +14500,7 @@ if (typeof __ftSwitchTab === 'function') {
       if ((await F.ref('referralCodes/' + code).once('value')).exists()) continue;
       var result = await ref.child('code').transaction(function (r) { if (r && r !== (prior && prior.code)) return; return code; }, undefined, false);
       if (!result.committed) continue;
-      var reserved = await F.ref('referralCodes/' + code).transaction(function (r) { if (r && r.businessId !== id) return; return r || { businessId: id, businessName: business.name || '' }; }, undefined, false);
+      var reserved = await F.ref('referralCodes/' + code).transaction(function (r) { if (r && r.businessId !== id) return; return r || { businessId: id, businessName: business.name || '', displayId: ftBusinessId(id, business.displayId) }; }, undefined, false);
       if (reserved.committed) return Object.assign({}, prior || {}, { code: code });
     }
     throw new Error('Could not reserve a unique referral ID. Please retry.');
@@ -14622,7 +14513,7 @@ if (typeof __ftSwitchTab === 'function') {
     if (owner.businessId === id) throw new Error('A business cannot refer itself.');
     var result = await F.ref('referralAccounts/' + id + '/claim').transaction(function (r) { if (r) return; return { code: code, businessId: owner.businessId, businessName: owner.businessName || '', linkedAt: firebase.database.ServerValue.TIMESTAMP }; }, undefined, false);
     if (!result.committed && (!result.snapshot.val() || result.snapshot.val().code !== code)) throw new Error('The referring business has already been set and cannot be changed.');
-    await F.ref('referralIntroductions/' + owner.businessId + '/' + id).set({businessId:id,businessName:business.name || '',code:code,registeredAt:Number(business.referralRegisteredAt)});
+    await F.ref('referralIntroductions/' + owner.businessId + '/' + id).set({businessId:id,businessName:business.name || '',displayId:ftBusinessId(id, business.displayId),code:code,registeredAt:Number(business.referralRegisteredAt)});
   };
   window.ftReferralRegistration = async function (id, business, code) { await F.ensureAccount(id, business); if (F.code(code)) await F.link(id, business, code); };
   window.ftApplyReferral = async function () { if (!F.admin()) return; try { await F.link(F.bid(), getCurrentBizRecord(), F.el('ftEnterReferral').value); alert('Referral saved. The first eligible paid subscription receives the one-time ' + F.firstDiscount + '% discount.'); } catch (e) { F.failure(e); } };
@@ -14681,7 +14572,7 @@ if (typeof __ftSwitchTab === 'function') {
     var rows = entries.map(function (x) {
       return '<tr style="border-top:1px solid var(--border)">'
         + F.cell(F.esc(x.businessName || '-'), 'font-weight:700')
-        + F.cell(F.esc(x.businessId || '-'), 'font-family:monospace;font-size:.72rem;color:var(--text-muted)')
+        + F.cell(F.esc(ftBusinessId(x.businessId, x.displayId)), 'font-family:monospace;font-size:.72rem;color:var(--text-muted)')
         + F.cell(F.esc(x.registeredAt ? new Date(x.registeredAt).toLocaleDateString('en-IN') : '-'))
         + F.cell(F.esc(x.expiry && Date.now() > x.expiry ? 'Expired' : (x.status || 'Registered')))
         + F.cell(x.success ? '<span style="color:#2E8B57;font-weight:900">Yes</span>' : '<span style="color:#DC2626;font-weight:900">No</span>')
@@ -14760,7 +14651,7 @@ if (typeof __ftSwitchTab === 'function') {
   F.mountPayment = function () {
     var plan = F.el('paPayPlan'); if (plan) { var placeholder = plan.querySelector('option[value=""]'); if (placeholder) placeholder.remove(); if (!plan.value) plan.value = Object.keys(paPlans().normal).find(function (k) { return F.daysFor(k) === 30; }) || plan.options[0].value; }
     var b = getCurrentBizRecord() || {};
-    if (F.el('ftPayBusinessId')) F.el('ftPayBusinessId').value = b.displayId || '';
+    if (F.el('ftPayBusinessId')) F.el('ftPayBusinessId').value = ftBusinessId(F.bid(), b.displayId);
     if (F.el('ftPayBusinessName')) F.el('ftPayBusinessName').textContent = b.name || '';
     var method = F.el('paPayMethod');
     if (method && !F.el('ftPayMethodSuggestions')) { var list = document.createElement('div'); list.id = 'ftPayMethodSuggestions'; list.hidden = true; list.style.cssText = 'position:absolute;top:100%;left:0;right:0;z-index:4;max-height:180px;overflow:auto;box-shadow:var(--shadow);background:var(--card-bg)'; method.closest('.form-group').appendChild(list); method.oninput = F.methodSuggestions; method.onfocus = F.methodSuggestions; method.onblur = function () { setTimeout(function () { list.hidden = true; }, 150); }; }
@@ -14809,7 +14700,7 @@ if (typeof __ftSwitchTab === 'function') {
       platformData.payments['REQ-' + id] = local;
       var msg = 'PAYMENT VERIFICATION REQUEST\n'
         + '--------------------------------\n'
-        + 'Business ID: ' + (b.displayId || '-') + '\n'
+        + 'Business ID: ' + (ftBusinessId(b.id, b.displayId)) + '\n'
         + 'Business Name: ' + (b.name || '') + '\n'
         + 'Selected Plan: ' + (PLAN_LABELS[plan] || plan) + '\n'
         + 'Pricing Type: ' + (pt === 'introductory' ? 'Introductory Pricing' : 'Normal Pricing') + '\n'
@@ -14846,7 +14737,7 @@ if (typeof __ftSwitchTab === 'function') {
 
 /* FINTRACK REQUESTED UPDATE: atomic verification, duration grants, history and benefits. */
 (function () {
-  var F = window.FTRequestedUpdate, busy = false, maintenanceBusy = false, timer = null;
+  var F = window.FTRequestedUpdate, busy = false, maintenanceBusy = false, timer = null, approveArmed = null; F.status = function (msg, tone) { var el = F.el('paPayStatus'); if (!el) return; if (!msg) { el.style.display = 'none'; el.innerHTML = ''; return; } var t = ({ error:['#fef2f2','#fecdd3','#9f1239'], ok:['#ecfdf5','#a7f3d0','#065f46'], warn:['#fffbeb','#fde68a','#92400e'], info:['#eff6ff','#bfdbfe','#1e40af'] })[tone] || ['#eff6ff','#bfdbfe','#1e40af']; el.style.display = 'block'; el.style.background = t[0]; el.style.border = '1px solid ' + t[1]; el.style.color = t[2]; el.innerHTML = msg; }; F.lockPayButtons = function (locked) { ['paApproveBtn','paRejectBtn'].forEach(function (id) { var b = F.el(id); if (!b) return; b.disabled = !!locked; b.style.opacity = locked ? '.55' : '1'; b.style.cursor = locked ? 'not-allowed' : 'pointer'; }); };
   F.date = function (ms) { return new Date(ms + 19800000).toISOString().slice(0,10); };
   /* The referral settings wording is written once here, so the platform
      administrator's account and every business administrator account read the
@@ -14878,7 +14769,7 @@ if (typeof __ftSwitchTab === 'function') {
       var r = accounts[id], b = businesses[id]; if (!b || !r.claim || !accounts[r.claim.businessId]) return;
       var from = accounts[r.claim.businessId], old = (from.referrals || {})[id] || {};
       from.referrals = from.referrals || {};
-      from.referrals[id] = Object.assign({}, old, { businessId:id,businessName:b.name || '',registeredAt:Number(b.referralRegisteredAt) || 0,status:F.end(b) >= now && b.subscriptionStatus === 'active' ? 'Active' : (b.subscriptionStatus || 'trial'),expiry:F.end(b) || 0,success:!!old.success,rewardPct:Number(old.rewardPct)||0 });
+      from.referrals[id] = Object.assign({}, old, { businessId:id,businessName:b.name || '',displayId:ftBusinessId(id, b.displayId),registeredAt:Number(b.referralRegisteredAt) || 0,status:F.end(b) >= now && b.subscriptionStatus === 'active' ? 'Active' : (b.subscriptionStatus || 'trial'),expiry:F.end(b) || 0,success:!!old.success,rewardPct:Number(old.rewardPct)||0 });
     });
   };
   F.creditReferral = function (root, id, now, paidAmount) {
@@ -14893,9 +14784,9 @@ if (typeof __ftSwitchTab === 'function') {
           var cfg = root.referralConfig || {}, reward = F.reward();
           var balance = Math.max(0,Number(from.rewardBalancePct)||0), granted = Math.min(reward,Math.max(0,F.maxBalance()-balance));
           from.rewardBalancePct = balance + granted; from.referrals = from.referrals || {};
-          from.referrals[id] = { businessId:id,businessName:b.name || '',registeredAt:Number(b.referralRegisteredAt),status:'Active',expiry:F.end(b),success:true,rewardPct:granted,qualifiedAt:now };
+          from.referrals[id] = { businessId:id,businessName:b.name || '',displayId:ftBusinessId(id, b.displayId),registeredAt:Number(b.referralRegisteredAt),status:'Active',expiry:F.end(b),success:true,rewardPct:granted,qualifiedAt:now };
           r.referralQualifiedAt = now;
-          F.notice(root,fromId,'ref_' + id,'Referral successful',(b.name || id) + ' subscribed, so your referral is successful. You earned ' + granted + '% referral discount credit for your next subscription. Available credit: ' + from.rewardBalancePct + '%.',now);
+          F.notice(root,fromId,'ref_' + id,'Referral successful',(b.name || ftBusinessId(id, b.displayId)) + ' subscribed, so your referral is successful. You earned ' + granted + '% referral discount credit for your next subscription. Available credit: ' + from.rewardBalancePct + '%.',now);
           var count = successes+1, milestoneCount = Number(cfg.milestoneCount)||0, milestoneDays = Number(cfg.milestoneDays)||0;
           if (!from.milestoneGranted && milestoneCount > 0 && milestoneCount <= cap && count >= milestoneCount && milestoneDays > 0 && milestoneDays <= 365) {
             var keepPlan = fromBiz.subscriptionPlan, keepDays = fromBiz.approvedDurationDays;
@@ -14948,32 +14839,31 @@ if (typeof __ftSwitchTab === 'function') {
   openPaymentDetail = function (id) {
     if (!platformAdminUser) return; var p = (platformData.payments || {})[id]; if (!p || p.status !== 'pending') return;
     paCurrentPaymentId = id; var b = (platformData.businesses || {})[p.businessId] || {};
-    F.el('paPaymentDetail').innerHTML = '<p><strong>Business:</strong> ' + F.esc(b.name) + ' (' + F.esc(b.displayId || p.businessDisplayId || '-') + ')</p><p><strong>Plan selected:</strong> ' + F.esc(PLAN_LABELS[p.plan] || p.plan) + '</p><p><strong>Submitted amount:</strong> ₹' + Number(p.amount || 0).toFixed(2) + '</p><p><strong>Payment method:</strong> ' + F.esc(p.paymentMethod || p.txnId || 'Legacy request') + '</p><p><strong>Mobile:</strong> ' + F.esc(p.mobile) + '</p><p><strong>Discount:</strong> ' + Number(p.discountPct || 0) + '% (₹' + Number(p.discountAmount || 0).toFixed(2) + ')</p><p style="margin:10px 0">Verify the payment details in the support WhatsApp conversation. The application does not store payment images.</p>' + F.field('Verified payment amount (₹)', 'ftVerifiedAmount','number',p.amount) + '<div class="form-group"><label>Approved subscription duration</label><select id="ftApprovedDays">' + [30,90,182,365].map(function (d) { return '<option value="'+d+'"'+(d===F.daysFor(p.plan)?' selected':'')+'>'+d+' days</option>'; }).join('') + '</select></div>';
-    F.el('ftVerifiedAmount').min = '0'; F.el('ftVerifiedAmount').step = '0.01'; F.el('paRejectReasonGroup').style.display = 'block'; F.el('paRejectReason').value = ''; F.el('paRejectBtn').innerText = 'Reject'; F.el('paPaymentModal').style.display = 'flex';
+    F.el('paPaymentDetail').innerHTML = '<p><strong>Business:</strong> ' + F.esc(b.name) + ' (' + F.esc(ftBusinessId(p.businessId, p.businessDisplayId)) + ')</p><p><strong>Plan selected:</strong> ' + F.esc(PLAN_LABELS[p.plan] || p.plan) + '</p><p><strong>Submitted amount:</strong> ₹' + Number(p.amount || 0).toFixed(2) + '</p><p><strong>Payment method:</strong> ' + F.esc(p.paymentMethod || p.txnId || 'Legacy request') + '</p><p><strong>Mobile:</strong> ' + F.esc(p.mobile) + '</p><p><strong>Discount:</strong> ' + Number(p.discountPct || 0) + '% (₹' + Number(p.discountAmount || 0).toFixed(2) + ')</p><p style="margin:10px 0">Verify the payment details in the support WhatsApp conversation. The application does not store payment images.</p>' + F.field('Verified payment amount (₹)', 'ftVerifiedAmount','number',p.amount) + '<div class="form-group"><label>Approved subscription duration</label><select id="ftApprovedDays">' + [30,90,182,365].map(function (d) { return '<option value="'+d+'"'+(d===F.daysFor(p.plan)?' selected':'')+'>'+d+' days</option>'; }).join('') + '</select></div>';
+    F.el('ftVerifiedAmount').min = '0'; F.el('ftVerifiedAmount').step = '0.01'; F.el('paRejectReasonGroup').style.display = 'block'; F.el('paRejectReason').value = ''; F.el('paRejectBtn').innerText = 'Reject'; busy = false; approveArmed = null; F.status(''); F.lockPayButtons(false); try { var ab = F.el('paApproveBtn'), rb = F.el('paRejectBtn'); if (ab) ab.onclick = function (ev) { if (ev) ev.preventDefault(); approvePayment(); }; if (rb) rb.onclick = function (ev) { if (ev) ev.preventDefault(); rejectPayment(); }; } catch (e) {} F.el('paPaymentModal').style.display = 'flex';
   };
   approvePayment = async function () {
-    if (busy || !platformAdminUser || !paCurrentPaymentId) return; var amount = Number(F.el('ftVerifiedAmount').value), days = Number(F.el('ftApprovedDays').value);
-    if (F.el('ftVerifiedAmount').value === '' || !Number.isFinite(amount) || amount < 0 || [30,90,182,365].indexOf(days)<0) return alert('Enter a valid verified amount and approved duration.');
-    if (!confirm('Approve the verified payment of ₹' + amount.toFixed(2) + ' and add ' + days + ' days?')) return;
-    busy = true; try {
-      var pid = paCurrentPaymentId, bid = (platformData.payments[pid] || {}).businessId;
-      var nid = 'PAY-' + pid + '-' + ((platformData.payments[pid] || {}).submittedAt || 0);
+    if (busy) return; if (!platformAdminUser) return F.status('Platform administrator access is required for this action.','error'); if (!paCurrentPaymentId) return F.status('Open a payment request from the list first.','error');
+    var amtEl = F.el('ftVerifiedAmount'), dayEl = F.el('ftApprovedDays'), amount = Number(amtEl ? amtEl.value : ''), days = Number(dayEl ? dayEl.value : '');
+    if (!amtEl || amtEl.value === '' || !Number.isFinite(amount) || amount < 0 || [30,90,182,365].indexOf(days) < 0) return F.status('Enter a valid verified amount and choose the approved subscription duration.','error');
+    if (!approveArmed || approveArmed.id !== paCurrentPaymentId || approveArmed.amount !== amount || approveArmed.days !== days) { approveArmed = { id: paCurrentPaymentId, amount: amount, days: days }; return F.status('Tap "Approve & Activate" again to confirm \u20b9' + amount.toFixed(2) + ' for ' + days + ' days.','warn'); }
+    approveArmed = null; busy = true; F.status('Saving the approval...','info'); F.lockPayButtons(true);
+    try { var pid = paCurrentPaymentId, bid = (platformData.payments[pid] || {}).businessId; var nid = 'PAY-' + pid + '-' + ((platformData.payments[pid] || {}).submittedAt || 0);
       await F.commit({paymentId:pid,id:nid,amount:Math.round(amount*100)/100,days:days});
-      closePaPaymentModal(); renderPlatformAdminViews();
-      var wa = F.whatsAppNotice(bid, 'decision_' + nid);
-      alert('Payment approved and saved. Subscription extended once and the business administrator notified.' + (wa ? '\n\nThe same message is open in WhatsApp - tap Send to deliver it to the business administrator.' : '\n\nAllow pop-ups to send the same message to the business administrator on WhatsApp, or use the WhatsApp button beside this business.'));
-    } catch(e) { F.failure(e); } finally { busy=false; }
+      renderPlatformAdminViews(); var wa = null; try { wa = F.whatsAppNotice(bid, 'decision_' + nid); } catch (e) {}
+      F.status('Payment approved. The subscription was extended once by ' + days + ' days and the business administrator was notified.' + (wa ? ' The same message is open in WhatsApp - tap Send to deliver it.' : ' Use the WhatsApp button beside this business to send the message.'),'ok');
+    } catch(e) { F.lockPayButtons(false); F.status('Not saved. ' + ((e && e.message) ? e.message : 'The platform database did not accept the change.'),'error'); } finally { busy = false; }
   };
   rejectPayment = async function () {
-    if (busy || !platformAdminUser || !paCurrentPaymentId) return; var reason = F.el('paRejectReason').value.trim(); if (!reason) return alert('Enter the rejection reason.'); busy=true;
-    try {
-      var pid = paCurrentPaymentId, bid = (platformData.payments[pid] || {}).businessId;
-      var nid = 'REJECT-' + pid + '-' + ((platformData.payments[pid] || {}).submittedAt || 0);
+    if (busy) return; if (!platformAdminUser) return F.status('Platform administrator access is required for this action.','error'); if (!paCurrentPaymentId) return F.status('Open a payment request from the list first.','error');
+    var reasonEl = F.el('paRejectReason'), reason = reasonEl ? reasonEl.value.trim() : '';
+    if (!reason) return F.status('Enter the rejection reason, then tap Reject.','error');
+    busy = true; F.status('Saving the rejection...','info'); F.lockPayButtons(true);
+    try { var pid = paCurrentPaymentId, bid = (platformData.payments[pid] || {}).businessId; var nid = 'REJECT-' + pid + '-' + ((platformData.payments[pid] || {}).submittedAt || 0);
       await F.commit({paymentId:pid,id:nid,reject:true,reason:reason});
-      closePaPaymentModal(); renderPlatformAdminViews();
-      var wa = F.whatsAppNotice(bid, 'decision_' + nid);
-      alert('Rejection saved. The business administrator has been notified and can submit a corrected request.' + (wa ? '\n\nThe same message is open in WhatsApp - tap Send to deliver it to the business administrator.' : '\n\nAllow pop-ups to send the same message to the business administrator on WhatsApp, or use the WhatsApp button beside this business.'));
-    } catch(e) { F.failure(e); } finally { busy=false; }
+      renderPlatformAdminViews(); var wa = null; try { wa = F.whatsAppNotice(bid, 'decision_' + nid); } catch (e) {}
+      F.status('Rejection saved. The business administrator has been notified and can submit a corrected request.' + (wa ? ' The same message is open in WhatsApp - tap Send to deliver it.' : ' Use the WhatsApp button beside this business to send the message.'),'ok');
+    } catch(e) { F.lockPayButtons(false); F.status('Not saved. ' + ((e && e.message) ? e.message : 'The platform database did not accept the change.'),'error'); } finally { busy = false; }
   };
   window.ftGrantManualSubscription = async function () { if (busy || !platformAdminUser) return; var bid=F.el('ftManualBusiness').value, days=Number(F.el('ftManualDays').value); if (!bid || !confirm('Manually add '+days+' subscription days to this business?')) return; busy=true; try { await F.commit({businessId:bid,days:days,amount:0}); renderPlatformAdminViews(); alert('Manual subscription saved separately from paid subscriptions. The administrator has been notified.'); } catch(e) { F.failure(e); } finally { busy=false; } };
   window.ftSaveReferralSettings = async function () {
@@ -15011,10 +14901,10 @@ if (typeof __ftSwitchTab === 'function') {
     var history=Object.values(Object.assign({},platformData.paymentHistory||{},platformData.payments||{})).sort(function(a,b){return (b.submittedAt||0)-(a.submittedAt||0);}), ht=F.el('paPaymentHistoryTable');
     if(ht) { ht.closest('table').querySelector('thead').innerHTML='<tr><th>Business</th><th>Plan / days</th><th>Verified amount</th><th>Payment method</th><th>Status</th><th>Submitted</th><th>Verified / expiry</th><th>Rejection reason</th></tr>'; ht.innerHTML=history.map(function(p){return '<tr><td>'+F.esc(p.businessName||((platformData.businesses||{})[p.businessId]||{}).name)+'</td><td>'+F.esc(PLAN_LABELS[p.approvedPlan||p.plan]||p.plan)+' / '+(p.approvedDays||'-')+'</td><td>₹'+Number(p.verifiedAmount==null?p.amount||0:p.verifiedAmount).toFixed(2)+'</td><td>'+F.esc(p.paymentMethod||p.txnId||'-')+'</td><td>'+F.esc(p.status)+'</td><td>'+F.esc(new Date(p.submittedAt||0).toLocaleDateString('en-IN'))+'</td><td>'+F.esc(p.expiryDate||'-')+'</td><td>'+F.esc(p.rejectionReason||'-')+'</td></tr>';}).join('')||'<tr><td colspan="8">No payment history.</td></tr>'; }
     if(!F.el('ftManualSubscriptionCard')) { var c=document.createElement('div');c.id='ftManualSubscriptionCard';c.className='app-card';c.innerHTML='<h3>Manual Subscription Activation / Extension</h3><p>Remaining active days are preserved. An administrative suspension is not removed.</p><div class="form-group"><label>Business</label><select id="ftManualBusiness"></select></div><div class="form-group"><label>Duration</label><select id="ftManualDays">'+[30,90,182,365].map(function(d){return '<option value="'+d+'">'+d+' days</option>';}).join('')+'</select></div><button class="btn-primary" onclick="ftGrantManualSubscription()">Activate / Extend</button><h3 style="margin-top:18px">Manual grant history</h3><div id="ftManualGrantHistory"></div><h3 style="margin-top:18px">Referral records - which business referred which</h3><div id="ftPlatformReferrals"></div>'; F.el('paSubscriptionsTab').appendChild(c); }
-    var select=F.el('ftManualBusiness'), selected=select.value; select.innerHTML=(window.ftBizOrderIds?ftBizOrderIds(platformData.businesses||{}):Object.keys(platformData.businesses||{})).map(function(id){var b=platformData.businesses[id];return '<option value="'+F.esc(id)+'">'+F.esc(b.name)+' ('+F.esc(b.displayId||'-')+')</option>';}).join(''); if(selected)select.value=selected;
+    var select=F.el('ftManualBusiness'), selected=select.value; select.innerHTML=(window.ftBizOrderIds?ftBizOrderIds(platformData.businesses||{}):Object.keys(platformData.businesses||{})).map(function(id){var b=platformData.businesses[id];return '<option value="'+F.esc(id)+'">'+F.esc(b.name)+' ('+F.esc(ftBusinessId(b.id, b.displayId))+')</option>';}).join(''); if(selected)select.value=selected;
     var __bizOrder=(window.ftBizOrderIds?ftBizOrderIds(platformData.businesses||{}):Object.keys(platformData.businesses||{})); var __bizRank=function(id){var i=__bizOrder.indexOf(id);return i<0?Number.MAX_SAFE_INTEGER:i;};
-    F.el('ftManualGrantHistory').innerHTML=Object.values(platformData.subscriptionHistory||{}).filter(function(x){return x.source!=='payment-verified';}).sort(function(a,b){return __bizRank(a.businessId)-__bizRank(b.businessId);}).map(function(x){return '<p>'+F.esc(((platformData.businesses||{})[x.businessId]||{}).name||x.businessId)+' — '+F.esc(x.source)+' — '+x.approvedDays+' days — ends '+F.esc(x.expiryDate)+'</p>';}).join('')||'No manual grants.';
-    F.el('ftPlatformReferrals').innerHTML=Object.keys(platformData.referralAccounts||{}).map(function(id){var r=platformData.referralAccounts[id];return '<p>'+F.esc(((platformData.businesses||{})[id]||{}).name||id)+' — '+F.esc(r.code)+' — referred by '+F.esc((r.claim||{}).businessName||'none')+' — successful '+Object.values(r.referrals||{}).filter(function(x){return x.success;}).length+' — balance '+(Number(r.rewardBalancePct)||0)+'%</p>';}).join('')||'No referral records.';
+    F.el('ftManualGrantHistory').innerHTML=Object.values(platformData.subscriptionHistory||{}).filter(function(x){return x.source!=='payment-verified';}).sort(function(a,b){return __bizRank(a.businessId)-__bizRank(b.businessId);}).map(function(x){return '<p>'+F.esc(((platformData.businesses||{})[x.businessId]||{}).name||ftBusinessId(x.businessId))+' — '+F.esc(x.source)+' — '+x.approvedDays+' days — ends '+F.esc(x.expiryDate)+'</p>';}).join('')||'No manual grants.';
+    F.el('ftPlatformReferrals').innerHTML=Object.keys(platformData.referralAccounts||{}).map(function(id){var r=platformData.referralAccounts[id];return '<p>'+F.esc(((platformData.businesses||{})[id]||{}).name||ftBusinessId(id))+' — '+F.esc(r.code)+' — referred by '+F.esc((r.claim||{}).businessName||'none')+' — successful '+Object.values(r.referrals||{}).filter(function(x){return x.success;}).length+' — balance '+(Number(r.rewardBalancePct)||0)+'%</p>';}).join('')||'No referral records.';
     F.renderReferralRecords();
     F.maintenance();
   };
@@ -15031,9 +14921,9 @@ if (typeof __ftSwitchTab === 'function') {
       var done = Object.values(r.referrals || {}).filter(function (x) { return x.success; }).length;
       var from = claim.businessId ? (businesses[claim.businessId] || {}) : null;
       return '<tr style="border-top:1px solid var(--border)">'
-        + F.cell(F.esc(b.name || id) + '<div style="font-size:.68rem;font-family:monospace;color:var(--text-muted)">' + F.esc(b.displayId || '-') + '</div>', 'font-weight:700')
+        + F.cell(F.esc(b.name || ftBusinessId(id)) + '<div style="font-size:.68rem;font-family:monospace;color:var(--text-muted)">' + F.esc(ftBusinessId(b.id, b.displayId)) + '</div>', 'font-weight:700')
         + F.cell(F.esc(r.code || 'not generated yet'), 'font-family:monospace')
-        + F.cell(from ? F.esc(from.name || claim.businessId) + '<div style="font-size:.68rem;font-family:monospace;color:var(--text-muted)">' + F.esc(claim.code || '') + '</div>' : 'No referring business linked')
+        + F.cell(from ? F.esc(from.name || ftBusinessId(claim.businessId, claim.displayId)) + '<div style="font-size:.68rem;font-family:monospace;color:var(--text-muted)">' + F.esc(claim.code || '') + '</div>' : 'No referring business linked')
         + F.cell(done + ' / ' + cap, 'font-weight:800')
         + F.cell(String(Math.max(0, cap - done)))
         + F.cell((Number(r.rewardBalancePct) || 0) + '%', 'font-weight:800')
@@ -15854,5 +15744,236 @@ if (typeof __ftSwitchTab === 'function') {
 })();
 </script>
 <!-- END FINTRACK REQUESTED SUBSCRIPTION / PAYMENT / REFERRAL UPDATE -->
-</body>
+<script id="ftBusinessLifecycleUpdate">
+/* FinTrack business lifecycle: bundled inline in the downloadable single-file app. */
+function ftFormatBusinessId(number) { return 'FT-' + String(number).padStart(3, '0'); }
+function ftValidBusinessId(value) {
+  return typeof value === 'string' && /^FT-\d{3,}$/.test(value) && Number.isSafeInteger(Number(value.slice(3))) && Number(value.slice(3)) > 0 && ftFormatBusinessId(Number(value.slice(3))) === value;
+}
+function ftBusinessId(id, saved) {
+  var value = ((platformData.businesses || {})[id] || {}).displayId;
+  return ftValidBusinessId(value) ? value : (ftValidBusinessId(saved) ? saved : '-');
+}
+function ftHighestBusinessNumber(root) {
+  var high = Math.max(Number(root.idCounter) || 0, Number((root.businessIdSequence || {}).counter) || 0, Number((root.public || {}).lastBusinessNumber) || 0);
+  ['businesses', 'archive', 'payments', 'paymentHistory', 'subscriptionHistory'].forEach(function (key) {
+    Object.keys(root[key] || {}).forEach(function (id) {
+      var item = root[key][id] || {}, value = item.displayId || item.businessDisplayId;
+      if (ftValidBusinessId(value)) high = Math.max(high, Number(value.slice(3)));
+    });
+  });
+  Object.keys(root.retiredBusinessIds || {}).forEach(function (id) { if (ftValidBusinessId(id)) high = Math.max(high, Number(id.slice(3))); });
+  return high;
+}
+function ftSyncReferralBusinessIds(root) {
+  var businesses = root.businesses || {};
+  function stamp(item) { var b = item && businesses[item.businessId]; if (b && ftValidBusinessId(b.displayId)) item.displayId = b.displayId; }
+  Object.keys(root.referralCodes || {}).forEach(function (key) { stamp(root.referralCodes[key]); });
+  Object.keys(root.referralIntroductions || {}).forEach(function (id) { Object.keys(root.referralIntroductions[id] || {}).forEach(function (key) { stamp(root.referralIntroductions[id][key]); }); });
+  Object.keys(root.referralAccounts || {}).forEach(function (id) {
+    var account = root.referralAccounts[id] || {}; stamp(account.claim);
+    Object.keys(account.referrals || {}).forEach(function (key) { stamp(account.referrals[key]); });
+  });
+}
+var ftBusinessIdSync = null;
+async function ftEnsureBusinessIds() {
+  if (!platformAdminUser) return false;
+  if (ftBusinessIdSync) return ftBusinessIdSync;
+  var sequence = platformData.businessIdSequence || {}, businesses = platformData.businesses || {};
+  if (sequence.initialized && Object.keys(businesses).every(function (id) { return ftValidBusinessId(businesses[id].displayId) && (sequence.assignments || {})[id] === businesses[id].displayId; })) return false;
+  ftBusinessIdSync = firebase.database().ref('atmos_platform_admin').transaction(function (root) {
+    if (!root) return;
+    var before = JSON.stringify(root), high = ftHighestBusinessNumber(root), used = {}, assigned = Object.assign({}, (root.businessIdSequence || {}).assignments || {}), missing = [], list = root.businesses || {};
+    Object.keys(assigned).forEach(function (id) { if ((root.retiredBusinessKeys || {})[id]) delete assigned[id]; else if (!list[id]) used[assigned[id]] = true; });
+    Object.keys(root.archive || {}).forEach(function (id) {
+      var value = (root.archive[id] || {}).displayId;
+      if (ftValidBusinessId(value)) { root.retiredBusinessIds = root.retiredBusinessIds || {}; root.retiredBusinessIds[value] = true; }
+    });
+    Object.keys(list).sort(function (a, b) { return (Number(list[a].referralRegisteredAt) || Date.parse(list[a].joiningDate || '') || 0) - (Number(list[b].referralRegisteredAt) || Date.parse(list[b].joiningDate || '') || 0) || a.localeCompare(b); }).forEach(function (id) {
+      var value = assigned[id] || list[id].displayId;
+      if (ftValidBusinessId(value) && !used[value] && !(root.retiredBusinessIds || {})[value]) { used[value] = true; assigned[id] = value; list[id].displayId = value; }
+      else missing.push(id);
+    });
+    missing.forEach(function (id) { high++; var value = ftFormatBusinessId(high); list[id].displayId = value; assigned[id] = value; });
+    root.businessIdSequence = { initialized: true, counter: high, assignments: assigned };
+    root.idCounter = high; ftSyncReferralBusinessIds(root);
+    if (JSON.stringify(root) === before) return;
+    return root;
+  }, undefined, false).then(function (result) {
+    if (result.snapshot.exists()) { platformData = Object.assign({}, platformData, result.snapshot.val()); ftKeepSavedBranding(); }
+    if (result.committed) renderPlatformAdminViews();
+    return !!result.committed;
+  }).finally(function () { ftBusinessIdSync = null; });
+  return ftBusinessIdSync;
+}
+async function ftNextBusinessNumber(bizId) {
+  if (!bizId) throw new Error('A registration is required before assigning its Business ID.');
+  var ref = firebase.database().ref('atmos_platform_admin/businessIdSequence');
+  if (platformAdminUser) {
+    var result = await ref.transaction(function (sequence) {
+      if (!sequence || !sequence.initialized || (sequence.assignments || {})[bizId]) return;
+      var next = Number(sequence.counter) + 1;
+      if (!Number.isSafeInteger(next) || next < 1) return;
+      sequence.counter = next; sequence.assignments = sequence.assignments || {}; sequence.assignments[bizId] = ftFormatBusinessId(next);
+      return sequence;
+    }, undefined, false);
+    var value = ((result.snapshot.val() || {}).assignments || {})[bizId];
+    if (ftValidBusinessId(value)) return Number(value.slice(3));
+  } else {
+    /* Conditional child rules compare the old counter and validate both writes.
+       The update commits both fields or neither; a competing registration retries. */
+    for (var attempt = 0; attempt < 10; attempt++) {
+      var sequence = (await ref.once('value')).val();
+      if (!sequence || !sequence.initialized) break;
+      var value = (sequence.assignments || {})[bizId];
+      if (ftValidBusinessId(value)) return Number(value.slice(3));
+      var next = Number(sequence.counter) + 1;
+      if (!Number.isSafeInteger(next) || next < 1) break;
+      var changes = { counter: next }; changes['assignments/' + bizId] = ftFormatBusinessId(next);
+      try { await ref.update(changes); return next; }
+      catch (error) {
+        var latest = (await ref.once('value')).val() || {};
+        if (ftValidBusinessId((latest.assignments || {})[bizId])) return Number(latest.assignments[bizId].slice(3));
+        if (Number(latest.counter) === Number(sequence.counter)) throw error;
+      }
+    }
+  }
+  throw new Error('Business ID numbering is unavailable. The platform administrator must apply the Firebase rules supplied with this update and open the Business Directory, then retry.');
+}
+/* Remove a deleted business's references, not other businesses' financial balances. */
+function ftPurgeBusinessRecords(root, bizId) {
+  ['businesses', 'archive', 'presence', 'dataUsage', 'referralAccounts', 'referralIntroductions'].forEach(function (key) { if (root[key]) delete root[key][bizId]; });
+  ['payments', 'paymentHistory', 'subscriptionHistory', 'notifications', 'cleanupLogs'].forEach(function (key) {
+    Object.keys(root[key] || {}).forEach(function (id) {
+      var item = root[key][id] || {};
+      if (item.businessId === bizId || item.referredBusinessId === bizId || id === 'ref_' + bizId || id === 'MILESTONE-' + bizId) { delete root[key][id]; return; }
+      if (Array.isArray(item.targetBusinessIds) && item.targetBusinessIds.indexOf(bizId) !== -1) { item.targetBusinessIds = item.targetBusinessIds.filter(function (id) { return id !== bizId; }); item.totalTargets = item.targetBusinessIds.length; }
+      if (item.readBy) delete item.readBy[bizId];
+    });
+  });
+  Object.keys(root.referralCodes || {}).forEach(function (code) { if ((root.referralCodes[code] || {}).businessId === bizId) delete root.referralCodes[code]; });
+  Object.keys(root.referralIntroductions || {}).forEach(function (id) { delete root.referralIntroductions[id][bizId]; });
+  Object.keys(root.referralAccounts || {}).forEach(function (id) {
+    var account = root.referralAccounts[id];
+    if (account.referrals) delete account.referrals[bizId];
+    if (account.claim && account.claim.businessId === bizId) delete account.claim;
+  });
+  Object.keys(root.businesses || {}).forEach(function (id) { var inbox = root.businesses[id].inbox; if (inbox) delete inbox['ref_' + bizId]; });
+  if (root.businessIdSequence && root.businessIdSequence.assignments) delete root.businessIdSequence.assignments[bizId];
+}
+function ftDeletionChanges(before, after, path, changes) {
+  Object.keys(Object.assign({}, before || {}, after || {})).forEach(function (key) {
+    var a = (before || {})[key], b = (after || {})[key], next = path + '/' + key;
+    if (b === undefined) changes[next] = null;
+    else if (JSON.stringify(a) !== JSON.stringify(b)) {
+      if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) ftDeletionChanges(a, b, next, changes);
+      else changes[next] = b;
+    }
+  });
+}
+var ftDeletingBusinesses = {};
+async function deleteBusiness(bizId) {
+  if (!platformAdminUser) { alert('Only the Main Platform Administrator can delete a business.'); return false; }
+  bizId = normalizeBizId(bizId);
+  var rec = (platformData.businesses || {})[bizId];
+  if (!bizId || !rec || ftDeletingBusinesses[bizId]) return false;
+  var label = ftBusinessId(bizId);
+  if (label === '-') { alert('Wait for Business ID assignment to finish, then retry.'); return false; }
+  var typed = window.prompt('PERMANENTLY DELETE ONE BUSINESS\n\nBusiness name: ' + (rec.name || '-') + '\nBusiness ID: ' + label + '\n\nAll of its business data, subscriptions, payments, notifications, referral references and sign-in links will be permanently removed. Other businesses and platform-wide lifetime totals will remain unchanged. Its Business ID will never be reused.\n\nThe Firebase sign-in identity is retained. Re-registering the same email requires its existing password or a password reset.\n\nType ' + label + ' to confirm:', '');
+  if (typed === null) return false;
+  if (String(typed).trim().toUpperCase() !== label) { alert('The Business ID did not match. Nothing was deleted.'); return false; }
+  ftDeletingBusinesses[bizId] = true;
+  var saved = false;
+  try {
+    var identity = firebaseAuth().currentUser;
+    if (!identity || identity.uid !== (platformData.credentials || {}).uid) throw new Error('Sign in again as the platform administrator before deleting a business.');
+    await ftEnsureBusinessIds();
+    var database = firebase.database();
+    var snapshots = await Promise.all([
+      database.ref('atmos_platform_admin').once('value'), database.ref(TENANT_CLAIMS_ROOT).once('value'),
+      database.ref(SIGNIN_INDEX_ROOT).once('value'), database.ref('atmos_admin_businesses').once('value'),
+      database.ref('atmos_hub_data_v12').once('value')
+    ]);
+    var fresh = snapshots[0].val() || {}, current = (fresh.businesses || {})[bizId];
+    if (!current || current.displayId !== label) throw new Error('The business changed. Refresh its profile and confirm deletion again.');
+    var next = JSON.parse(JSON.stringify(fresh));
+    next.retiredBusinessIds = next.retiredBusinessIds || {}; next.retiredBusinessIds[label] = true;
+    next.retiredBusinessKeys = next.retiredBusinessKeys || {}; next.retiredBusinessKeys[bizId] = true;
+    ftPurgeBusinessRecords(next, bizId);
+    var changes = {}; ftDeletionChanges(fresh, next, 'atmos_platform_admin', changes);
+    changes['businesses/' + bizId] = null; changes['atmos_notification_receipts/' + bizId] = null;
+    [TENANT_CLAIMS_ROOT, SIGNIN_INDEX_ROOT, 'atmos_admin_businesses'].forEach(function (key, index) {
+      var entries = snapshots[index + 1].val() || {};
+      Object.keys(entries).forEach(function (id) { if (entries[id] && entries[id].b === bizId) changes[key + '/' + id] = null; });
+    });
+    var legacy = snapshots[4].val();
+    if (legacy && legacy.businessId === bizId) changes.atmos_hub_data_v12 = null;
+    await database.ref().update(changes); saved = true;
+    platformData = next;
+    if (window.ftBizKB) delete window.ftBizKB[bizId];
+    try { localStorage.removeItem('FT_BIZ_BRAND_' + bizId); localStorage.removeItem('FT_WELCOME_SENT_' + bizId); } catch (e) {}
+    paCurrentBizId = null; switchPATab('paBusinessesTab');
+    alert(label + ' and its associated database records were permanently deleted. Its ID is retired and will never be assigned again.');
+    return true;
+  } catch (error) {
+    alert(saved ? 'The deletion was saved, but the display could not refresh. Reopen the Business Directory.' : 'Deletion was not completed. ' + ftAccountError(error));
+    return saved;
+  } finally { delete ftDeletingBusinesses[bizId]; }
+}
+async function ftPersistPlatformData() {
+  if (!platformAdminUser) ftIsPlatformAdmin();
+  if (platformAdminUser && platformDbRef && platformSyncActive) {
+    var pending = JSON.parse(JSON.stringify(platformData));
+    await mirrorPublicPlatformSlice();
+    return platformDbRef.transaction(function (current) {
+      if (!current) return;
+      var next = JSON.parse(JSON.stringify(pending));
+      next.businesses = Object.assign({}, current.businesses || {}, next.businesses || {});
+      ['businessIdSequence', 'retiredBusinessIds', 'retiredBusinessKeys'].forEach(function (key) { if (current[key]) next[key] = current[key]; });
+      next.idCounter = Math.max(ftHighestBusinessNumber(current), ftHighestBusinessNumber(next));
+      Object.keys((current.businessIdSequence || {}).assignments || {}).forEach(function (id) { if (next.businesses[id]) next.businesses[id].displayId = current.businessIdSequence.assignments[id]; });
+      Object.keys(current.retiredBusinessKeys || {}).forEach(function (id) { ftPurgeBusinessRecords(next, id); });
+      return next;
+    }, undefined, false);
+  }
+  if (authBusinessId && (platformData.businesses || {})[authBusinessId]) return firebase.database().ref('atmos_platform_admin/businesses/' + authBusinessId).update(platformData.businesses[authBusinessId]);
+}
+/* Extend only the rules needed for numbering, immutability and complete deletion. */
+(function () {
+  var rules = JSON.parse(PA_FIREBASE_RULES).rules;
+  var admin = "(auth != null && (root.child('atmos_platform_bootstrap/uid').val() === auth.uid || root.child('atmos_platform_admin/credentials/uid').val() === auth.uid))";
+  var owner = "root.child('atmos_admin_businesses/'+auth.uid+'/b').val()";
+  var count = "newData.parent().parent().child('counter').val()";
+  var formatted = "(" + count + " < 10 ? 'FT-00'+" + count + " : (" + count + " < 100 ? 'FT-0'+" + count + " : 'FT-'+" + count + "))";
+  var platform = rules.atmos_platform_admin;
+  var allocation = "auth != null && " + owner + " === $businessId && !data.exists() && newData.isString() && newData.val() === " + formatted + " && newData.parent().parent().child('counter').val() === root.child('atmos_platform_admin/businessIdSequence/counter').val()+1";
+  platform.businessIdSequence = {
+    '.read': 'auth != null', '.write': admin,
+    '.validate': "newData.hasChildren(['counter','initialized']) && newData.child('initialized').val() === true && newData.child('counter').isNumber()",
+    counter: {
+      '.write': "auth != null && " + owner + " != null && data.parent().child('initialized').val() === true && newData.val() === data.val()+1 && !root.child('atmos_platform_admin/businessIdSequence/assignments/'+" + owner + ").exists() && newData.parent().child('assignments/'+" + owner + ").isString()",
+      '.validate': 'newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0 && (!data.exists() || newData.val() >= data.val())'
+    },
+    initialized: { '.validate': 'newData.val() === true' },
+    assignments: { '$businessId': {
+      '.write': admin + ' || (' + allocation + ')',
+      '.validate': "newData.isString() && newData.val().matches(/^FT-[0-9]{3,}$/) && ((data.exists() && newData.val() === data.val()) || (!data.exists() && (" + admin + ' || (' + allocation + '))))'
+    } },
+    '$other': { '.validate': false }
+  };
+  var business = platform.businesses.$businessId;
+  business['.validate'] = '(' + business['.validate'] + ") && !root.child('atmos_platform_admin/retiredBusinessKeys/'+$businessId).exists() && (" + admin + " || ((!data.child('displayId').exists() && !newData.child('displayId').exists()) || (newData.child('displayId').isString() && newData.child('displayId').val() === root.child('atmos_platform_admin/businessIdSequence/assignments/'+$businessId).val() && (!data.child('displayId').exists() || newData.child('displayId').val() === data.child('displayId').val()))))";
+  business['.validate'] += " && (!data.child('displayId').exists() || newData.child('displayId').val() === data.child('displayId').val() || (" + admin + " && data.child('displayId').val() !== root.child('atmos_platform_admin/businessIdSequence/assignments/'+$businessId).val() && newData.child('displayId').val() === newData.parent().parent().child('businessIdSequence/assignments/'+$businessId).val()))";
+  platform['.validate'] += " && (!data.child('businessIdSequence').exists() || newData.child('businessIdSequence').exists())";
+  rules.businesses.$businessId['.validate'] = "!root.child('atmos_platform_admin/retiredBusinessKeys/'+$businessId).exists()";
+  rules.atmos_admin_businesses.$uid['.validate'] += " && !root.child('atmos_platform_admin/retiredBusinessKeys/'+newData.child('b').val()).exists()";
+  rules.atmos_notification_receipts['.write'] = admin;
+  rules.atmos_hub_data_v12['.write'] = admin + ' && !newData.exists()';
+  ['referralCodes', 'referralIntroductions'].forEach(function (key) {
+    var item = key === 'referralCodes' ? platform[key].$code : platform[key].$businessId.$referredId;
+    item.displayId = { '.validate': "newData.isString() && newData.val().matches(/^FT-[0-9]{3,}$/) && (" + admin + " || newData.val() === root.child('atmos_platform_admin/businessIdSequence/assignments/'+newData.parent().child('businessId').val()).val())" };
+  });
+  PA_FIREBASE_RULES = JSON.stringify({ rules: rules }, null, 2);
+})();
+</script></body>
 </html>
