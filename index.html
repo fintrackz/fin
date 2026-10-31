@@ -14572,7 +14572,7 @@ if (typeof __ftSwitchTab === 'function') {
     var rows = entries.map(function (x) {
       return '<tr style="border-top:1px solid var(--border)">'
         + F.cell(F.esc(x.businessName || '-'), 'font-weight:700')
-        + F.cell(F.esc(ftBusinessId(x.businessId, x.displayId)), 'font-family:monospace;font-size:.72rem;color:var(--text-muted)')
+        + F.cell(F.esc(ftBusinessId(x.businessId || x.id, x.displayId)), 'font-family:monospace;font-size:.72rem;color:var(--text-muted)')
         + F.cell(F.esc(x.registeredAt ? new Date(x.registeredAt).toLocaleDateString('en-IN') : '-'))
         + F.cell(F.esc(x.expiry && Date.now() > x.expiry ? 'Expired' : (x.status || 'Registered')))
         + F.cell(x.success ? '<span style="color:#2E8B57;font-weight:900">Yes</span>' : '<span style="color:#DC2626;font-weight:900">No</span>')
@@ -15744,7 +15744,14 @@ if (typeof __ftSwitchTab === 'function') {
 })();
 </script>
 <!-- END FINTRACK REQUESTED SUBSCRIPTION / PAYMENT / REFERRAL UPDATE -->
-<script id="ftBusinessLifecycleUpdate">
+<script>
+/* global platformData:writable, paCurrentBizId:writable, PA_FIREBASE_RULES:writable,
+          platformAdminUser:readonly, firebase:readonly, ftKeepSavedBranding:readonly,
+          renderPlatformAdminViews:readonly, normalizeBizId:readonly, firebaseAuth:readonly,
+          TENANT_CLAIMS_ROOT:readonly, SIGNIN_INDEX_ROOT:readonly, switchPATab:readonly,
+          ftAccountError:readonly, ftIsPlatformAdmin:readonly, platformDbRef:readonly,
+          platformSyncActive:readonly, mirrorPublicPlatformSlice:readonly, authBusinessId:readonly */
+/* These shared bindings are provided by the preceding classic scripts in the HTML app. */
 /* FinTrack business lifecycle: bundled inline in the downloadable single-file app. */
 function ftFormatBusinessId(number) { return 'FT-' + String(number).padStart(3, '0'); }
 function ftValidBusinessId(value) {
@@ -15752,7 +15759,10 @@ function ftValidBusinessId(value) {
 }
 function ftBusinessId(id, saved) {
   var value = ((platformData.businesses || {})[id] || {}).displayId;
-  return ftValidBusinessId(value) ? value : (ftValidBusinessId(saved) ? saved : '-');
+  if (ftValidBusinessId(value)) return value;
+  if (ftValidBusinessId(saved)) return saved;
+  if (ftValidBusinessId(id)) return id;
+  return '-';
 }
 function ftHighestBusinessNumber(root) {
   var high = Math.max(Number(root.idCounter) || 0, Number((root.businessIdSequence || {}).counter) || 0, Number((root.public || {}).lastBusinessNumber) || 0);
@@ -15775,12 +15785,28 @@ function ftSyncReferralBusinessIds(root) {
     Object.keys(account.referrals || {}).forEach(function (key) { stamp(account.referrals[key]); });
   });
 }
+/* Records created before numbering existed carry no Business ID; they are repaired below. */
+function ftReferralIdsStale(root) {
+  var businesses = root.businesses || {}, stale = false;
+  function check(item) {
+    if (!item || !item.businessId) return;
+    var business = businesses[item.businessId];
+    if (business && ftValidBusinessId(business.displayId) && item.displayId !== business.displayId) stale = true;
+  }
+  Object.keys(root.referralCodes || {}).forEach(function (key) { check(root.referralCodes[key]); });
+  Object.keys(root.referralIntroductions || {}).forEach(function (id) { Object.keys(root.referralIntroductions[id] || {}).forEach(function (key) { check(root.referralIntroductions[id][key]); }); });
+  Object.keys(root.referralAccounts || {}).forEach(function (id) {
+    var account = root.referralAccounts[id] || {}; check(account.claim);
+    Object.keys(account.referrals || {}).forEach(function (key) { check(account.referrals[key]); });
+  });
+  return stale;
+}
 var ftBusinessIdSync = null;
 async function ftEnsureBusinessIds() {
   if (!platformAdminUser) return false;
   if (ftBusinessIdSync) return ftBusinessIdSync;
   var sequence = platformData.businessIdSequence || {}, businesses = platformData.businesses || {};
-  if (sequence.initialized && Object.keys(businesses).every(function (id) { return ftValidBusinessId(businesses[id].displayId) && (sequence.assignments || {})[id] === businesses[id].displayId; })) return false;
+  if (sequence.initialized && !ftReferralIdsStale(platformData) && Object.keys(businesses).every(function (id) { return ftValidBusinessId(businesses[id].displayId) && (sequence.assignments || {})[id] === businesses[id].displayId; })) return false;
   ftBusinessIdSync = firebase.database().ref('atmos_platform_admin').transaction(function (root) {
     if (!root) return;
     var before = JSON.stringify(root), high = ftHighestBusinessNumber(root), used = {}, assigned = Object.assign({}, (root.businessIdSequence || {}).assignments || {}), missing = [], list = root.businesses || {};
