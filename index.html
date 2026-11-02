@@ -2192,8 +2192,9 @@ html, body { background-color: transparent !important; background-image: none !i
           <input type="month" id="monthClosingPicker" onchange="checkMonthClosingStatus()">
         </div>
         <span id="closingStatusBadge" class="badge badge-open">Status: Open</span>
-        <button id="btnCloseMonthToggle" class="btn-admin" onclick="toggleMonthClosing()" style="width: auto;">Close Month & Transfer Balances</button>
+        <button id="btnCloseMonthToggle" class="btn-admin" onclick="ftcOpenClosingWizard((document.getElementById('monthClosingPicker')||{}).value)" style="width: auto;">Close Month &amp; Transfer Balances</button>
         <button id="btnViewClosingReport" class="btn-secondary" style="width: auto; display:none;" onclick="ftcOpenClosingWizard((document.getElementById('monthClosingPicker')||{}).value)"><i class="fa-solid fa-file-lines"></i> Closing Report</button>
+        <div id="ftcRecloseSlot"></div>
         <button id="btnSaveMonthToHistorical" class="btn-primary" onclick="saveCurrentMonthToHistorical()" style="width: auto; background: var(--accent-amber); display: none;">Save Final Month to Historical Data</button>
       </div>
 
@@ -5769,8 +5770,18 @@ const FIREBASE_CONFIG = {
       if (eMonth !== filterMonth) return;
 
       const amt = parseFloat(e.amount || 0);
-      if (e.payMode === 'Cash Drawer') cash -= amt;
+      if (e.funding) {
+        cash -= parseFloat(e.funding.cash || 0);
+        bank -= parseFloat(e.funding.bank || 0);
+      } else if (e.payMode === 'Cash Drawer') cash -= amt;
       else if (e.payMode === 'Bank/UPI') bank -= amt;
+    });
+
+    // Administrator fund repayments recorded during month-end closing
+    (appData.adminFundRepayments || []).forEach(function (r) {
+      if ((r.month || '') !== filterMonth) return;
+      var rAmt = parseFloat(r.amount || 0);
+      if (r.source === 'Cash Drawer') cash -= rAmt; else bank -= rAmt;
     });
 
     // Process Internal Transfers
@@ -16298,6 +16309,19 @@ async function ftPersistPlatformData() {
 #ftcWizard .ftc-check.bad { border-color: #fecaca; background: #fef2f2; }
 #ftcWizard .ftc-check i { margin-top: 2px; }
 #ftcWizard .ftc-check b { display: block; font-weight: 800; }
+#ftcWizard .ftc-wz-card { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+#ftcWizard .ftc-wz-kicker { font-size: .68rem; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; opacity: .72; }
+#ftcWizard .ftc-wz-title { font-size: 1.08rem; font-weight: 900; }
+#ftcWizard .ftc-wz-x { margin-left: auto; background: rgba(255,255,255,.14); color: #fff; border: 0; border-radius: 9px; width: 34px; height: 34px; font-size: .95rem; cursor: pointer; }
+#ftcWizard .ftc-step { display: flex; align-items: center; gap: 7px; font-size: .72rem; font-weight: 800; color: #64748b; padding: 6px 11px; border-radius: 999px; border: 1px solid #e2e8f0; background: #f8fafc; cursor: pointer; white-space: nowrap; }
+#ftcWizard .ftc-step:hover { border-color: #cbd5e1; color: #0b1e2d; }
+#ftcWizard .ftc-step.active { color: #fff; background: #0b1e2d; border-color: #0b1e2d; }
+#ftcWizard .ftc-step-no { width: 19px; height: 19px; border-radius: 50%; background: #e2e8f0; color: #475569; display: grid; place-items: center; font-size: .64rem; font-weight: 900; }
+#ftcWizard .ftc-step.active .ftc-step-no { background: rgba(255,255,255,.24); color: #fff; }
+#ftcWizard .ftc-wz-foot-actions { margin-left: auto; display: flex; gap: 10px; flex-wrap: wrap; }
+#ftcWizard .ftc-wz-lock { font-size: .78rem; font-weight: 700; color: #b45309; flex: 1 1 220px; }
+#ftcWizard .ftc-wz-panel input, #ftcWizard .ftc-wz-panel select { border: 1px solid #cbd5e1; border-radius: 8px; padding: 7px 9px; font-size: .8rem; color: #0b1e2d; background: #fff; }
+#ftcWizard .ftc-wz-panel label { display: block; margin-bottom: 4px; }
 
 /* ---------- PART 2 : settlement modal ------------------------------------- */
 #ftcSettleModal {
@@ -16495,7 +16519,7 @@ async function ftPersistPlatformData() {
      nothing is blocked) until the administrator actually closes it. Every
      month from here onward follows the standard rule: closing opens after
      7:00 PM IST on the last day of the month, then the mandatory lock. */
-  var CLOSE_RELAX = { '2026-10': true };
+  var CLOSE_RELAX = {};
   var relaxHidden = false;
   function closingRelaxed(mk) {
     var until = CLOSE_RELAX[mk];
@@ -16554,7 +16578,11 @@ async function ftPersistPlatformData() {
 
     (appData.expenseLog || []).filter(function (e) { return String(e.date || '').substring(0, 7) === mk; }).forEach(function (e) {
       var amt = num(e.amount);
-      if (e.payMode === 'Cash Drawer') { cash -= amt; cr('Expense \u00B7 ' + (e.category || ''), -amt, (e.desc || '') + ' \u00B7 ' + e.date); }
+      if (e.funding) {
+        var fc = num(e.funding.cash), fb = num(e.funding.bank);
+        if (fc) { cash -= fc; cr('Expense \u00B7 ' + (e.category || ''), -fc, (e.desc || '') + ' \u00B7 ' + e.date); }
+        if (fb) { bank -= fb; br('Expense \u00B7 ' + (e.category || ''), -fb, (e.desc || '') + ' \u00B7 ' + e.date); }
+      } else if (e.payMode === 'Cash Drawer') { cash -= amt; cr('Expense \u00B7 ' + (e.category || ''), -amt, (e.desc || '') + ' \u00B7 ' + e.date); }
       else if (e.payMode === 'Bank/UPI') { bank -= amt; br('Expense \u00B7 ' + (e.category || ''), -amt, (e.desc || '') + ' \u00B7 ' + e.date); }
     });
 
@@ -16824,10 +16852,23 @@ async function ftPersistPlatformData() {
     hideGate();
   };
 
+  function closingInProgressMonth() {
+    var f = appData && appData.closingInProgress;
+    if (!f || !f.month) return null;
+    if (Date.now() - num(f.at) > 90 * 60 * 1000) return null;
+    if (isClosedMonth(f.month) && !f.reclose) return null;
+    return f.month;
+  }
+
   function renderGate() {
     var el = gateEl();
+    try { paintRecloseSlot(); } catch (e) { }
     if (!currentUser || isPlatformAdmin()) { hideGate(); return; }
     var pending = pendingCloseMonth();
+    if (!pending && !isAdminUser()) {
+      var inProg = closingInProgressMonth();
+      if (inProg) pending = inProg;
+    }
     if (!pending) { hideGate(); maybeGreeting(); return; }
 
     if (closingRelaxed(pending)) {
@@ -16850,6 +16891,12 @@ async function ftPersistPlatformData() {
     document.body.style.overflow = 'hidden';
   }
 
+  function paintRecloseSlot() {
+    var slot = document.getElementById('ftcRecloseSlot');
+    if (!slot) return;
+    slot.innerHTML = (isAdminUser() && typeof recloseNoteHTML === 'function') ? recloseNoteHTML() : '';
+  }
+
   window.ftcGateLogout = function () { try { appLogout(); } catch (e) { location.reload(); } };
 
   window.ftcStartClosing = function () {
@@ -16860,16 +16907,14 @@ async function ftPersistPlatformData() {
 
   function maybeGreeting() {
     if (greetingAttempted) return;
-    if (!currentUser || currentUser.role !== 'Staff') return;
+    if (!currentUser) return;
+    if (!(currentUser.role === 'Staff' || currentUser.role === 'Admin')) return;
+    if (pendingCloseMonth()) return;
     greetingAttempted = true;
     var mk = getISTMonthStr();
     var key = 'ftcGreeting_' + (currentUser.name || '') + '_' + mk;
     try { if (localStorage.getItem(key)) return; } catch (e) { }
-    var el = document.getElementById('ftcGreeting');
-    if (!el) return;
-    document.getElementById('ftcGreetingName').innerText = currentUser.name || 'Team';
-    document.getElementById('ftcGreetingMonth').innerText = monthLabel(mk);
-    el.style.display = 'flex';
+    if (typeof showGreeting === 'function') showGreeting(mk);
     try { localStorage.setItem(key, '1'); } catch (e) { }
   }
 
@@ -16879,14 +16924,21 @@ async function ftPersistPlatformData() {
   };
 
   /* ==================================================================
-     PART 5 / 6 — month-end closing wizard
+     PART 5 / 6 - month-end closing wizard (7 mandatory stages)
      ================================================================== */
+  var STEP_TITLES = ['Service & Receivables', 'Closing Balances', 'Expense Finalization', 'Cash Book Summary', 'Admin Transfer', 'Opening Balances', 'Closing Report'];
+  var STEP_COUNT = 7;
+
   var wz = { month: null, step: 1 };
-  var STEP_TITLES = ['Service Terminal Overview', 'Receivable Settlement', 'Cash Drawer', 'Bank / UPI', 'Staff Salaries', 'Final Validation', 'Lock the Month', 'Closing Report'];
 
   function openWizard(mk) {
     wz.month = mk || pendingCloseMonth() || getISTMonthStr();
-    wz.step = isClosedMonth(wz.month) ? 8 : 1;
+    var d = draft(wz.month);
+    if (wz.reclose) wz.step = 1;
+    else if (isClosedMonth(wz.month)) wz.step = STEP_COUNT;
+    else wz.step = Math.min(STEP_COUNT, Math.max(1, num(d.step) || 1));
+    appData.closingInProgress = { month: wz.month, at: Date.now(), reclose: !!wz.reclose, by: (currentUser && currentUser.name) || 'Admin' };
+    saveData();
     document.getElementById('ftcWizard').style.display = 'flex';
     document.body.style.overflow = 'hidden';
     renderWizard();
@@ -16895,14 +16947,19 @@ async function ftPersistPlatformData() {
   window.ftcCloseWizard = function () {
     document.getElementById('ftcWizard').style.display = 'none';
     document.body.style.overflow = '';
+    var n = document.getElementById('ftcFloatNote');
+    if (n) n.style.display = 'none';
+    wz.reclose = false;
+    if (appData.closingInProgress && !wz.keepFlag) { appData.closingInProgress = null; saveData(); }
     renderGate();
+    try { paintRecloseSlot(); } catch (e) { }
     refreshAllViews();
   };
 
   window.ftcOpenClosingWizard = function (mk) { openWizard(mk || pendingCloseMonth() || getISTMonthStr()); };
 
   function tile(label, value, color) {
-    return '<div class="ftc-wz-tile"><span>' + esc(label) + '</span><strong' + (color ? ' style="color:' + color + '"' : '') + '>' + value + '</strong></div>';
+    return '<div class="ftc-wz-tile" style="text-align:center;"><span>' + esc(label) + '</span><strong' + (color ? ' style="color:' + color + '"' : '') + '>' + value + '</strong></div>';
   }
 
   function tableHTML(cols, rows, emptyText) {
@@ -16911,10 +16968,71 @@ async function ftPersistPlatformData() {
     return '<div class="ftc-wz-scroll"><table>' + head + '<tbody>' + body + '</tbody></table></div>';
   }
 
-  function stepOverview() {
-    var mk = wz.month;
+  function r2(v) { return Math.round(num(v) * 100) / 100; }
+
+  /* ------------------------------------------------------------ draft state */
+  function draft(mk) {
+    if (!appData.closingDrafts) appData.closingDrafts = {};
+    if (!appData.closingDrafts[mk]) appData.closingDrafts[mk] = { step: 1 };
+    var d = appData.closingDrafts[mk];
+    if (!d.pay) d.pay = { cash: 0, bank: 0 };
+    if (!d.transfer) d.transfer = { cash: 0, bank: 0, confirmed: false };
+    if (!d.opening) d.opening = { cash: 0, bank: 0, set: false };
+    if (!d.repays) d.repays = [];
+    return d;
+  }
+
+  function dateInMonth(mk) {
+    var t = getISTDateStr();
+    if (t.substring(0, 7) === mk) return t;
+    var day = daysIn(mk);
+    return mk + '-' + (day < 10 ? '0' + day : '' + day);
+  }
+
+  function expensesOf(mk) {
+    return (appData.expenseLog || []).filter(function (e) { return String(e.date || '').substring(0, 7) === mk; });
+  }
+  function shopExpensesTotal(mk) {
+    var t = 0;
+    expensesOf(mk).forEach(function (e) {
+      if (e.isSalaryFinalization || e.isClosingExpense) return;
+      t += num(e.amount);
+    });
+    return r2(t);
+  }
+  function additionalExpensesTotal(mk) {
+    var t = 0;
+    expensesOf(mk).forEach(function (e) { if (e.isClosingExpense) t += num(e.amount); });
+    return r2(t);
+  }
+  function adminFundedOf(mk) {
+    var t = 0;
+    expensesOf(mk).forEach(function (e) { if (e.funding) t += num(e.funding.admin); });
+    (draft(mk).repays || []).forEach(function () { });
+    return r2(t);
+  }
+  function repaidOf(mk) {
+    var t = 0;
+    (appData.adminFundRepayments || []).forEach(function (x) { if (x.month === mk) t += num(x.amount); });
+    return r2(t);
+  }
+  function adminFundOutstandingBefore(mk) {
+    var funded = 0, repaid = 0;
+    Object.keys(appData.closedMonths || {}).forEach(function (k) {
+      if (k >= mk) return;
+      var rec = appData.closedMonths[k];
+      if (rec && rec.adminFund) { funded += num(rec.adminFund.funded); repaid += num(rec.adminFund.repaid); }
+    });
+    Object.keys(appData.closingDrafts || {}).forEach(function (k) {
+      if (k >= mk) return;
+      if (appData.closedMonths && appData.closedMonths[k]) return;
+      funded += adminFundedOf(k); repaid += repaidOf(k);
+    });
+    return r2(funded - repaid);
+  }
+  function serviceTotals(mk) {
     var list = entriesOf(mk);
-    var charges = 0, discount = 0, dept = 0, cash = 0, bank = 0, recv = 0;
+    var charges = 0, discount = 0, dept = 0, recv = 0, cash = 0, bank = 0;
     list.forEach(function (s) {
       charges += num(s.serviceCharge);
       discount += num(s.discount);
@@ -16925,421 +17043,1014 @@ async function ftPersistPlatformData() {
       else if (s.payMode === 'Bank/UPI') bank += t;
       else recv += t;
     });
-    var rows = list.slice().sort(function (a, b) { return entryDateTimeValue(b) - entryDateTimeValue(a); }).map(function (s) {
-      return '<tr>' +
-        '<td>' + esc(s.date) + '<br><span style="color:#94a3b8;font-size:.7rem;">' + esc(s.time || '') + '</span></td>' +
-        '<td>' + esc(s.desc || '') + (s.receivablePersonName ? '<br><span style="color:#7c3aed;font-size:.7rem;">' + esc(s.receivablePersonName) + '</span>' : '') + '</td>' +
-        '<td>' + money(s.serviceCharge) + '</td>' +
-        '<td>' + money(s.discount) + '</td>' +
-        '<td>' + money(s.deptFee) + '</td>' +
-        '<td><strong>' + money(s.total) + '</strong></td>' +
-        '<td>' + esc(s.isSplit || s.payMode === 'Split Payment' ? 'Split' : s.payMode) + '</td>' +
-        '<td>' + esc(s.staff || '\u2014') + '</td></tr>';
-    });
-    return '<div class="ftc-wz-panel">' +
-      '<h3>Stage 1 \u00B7 Service Terminal Overview</h3>' +
-      '<p class="ftc-wz-hint">Read-only review of every service recorded in ' + esc(monthLabel(mk)) + ', using the same figures as the Service Collections overview.</p>' +
-      '<div class="ftc-wz-grid">' +
-      tile('Interactions', String(list.length)) +
-      tile('Service charges', money(charges)) +
-      tile('Discounts', money(discount)) +
-      tile('Department fees', money(dept)) +
-      tile('Cash collected', money(cash), '#059669') +
-      tile('Bank / UPI collected', money(bank), '#2563eb') +
-      tile('Receivables raised', money(recv), '#7c3aed') +
-      tile('Net service income', money(charges - discount), '#059669') +
-      '</div>' +
-      tableHTML(['Date', 'Service', 'Charge', 'Discount', 'Dept fee', 'Total', 'Mode', 'Staff'], rows, 'No service entries were recorded in this month.') +
-      '</div>';
+    return { list: list, charges: r2(charges), discount: r2(discount), dept: r2(dept), recv: r2(recv), cash: r2(cash), bank: r2(bank), net: r2(charges - discount) };
   }
 
-  function stepReceivables() {
-    var mk = wz.month;
-    var list = openReceivables(mk);
+  /* --------------------------------------------------------------- salaries */
+  function salaryTotals(mk) {
+    var rows = salaryRows(mk);
+    var total = 0, pending = 0;
+    rows.forEach(function (r) {
+      if (r.finalized) total += num(r.finalizedAmount);
+      else if (r.total > 0) pending++;
+    });
+    return { rows: rows, total: r2(total), pending: pending };
+  }
+  function appliedSalaryFunding(mk) {
+    var cash = 0, bank = 0, admin = 0;
+    expensesOf(mk).forEach(function (e) {
+      if (!e.isSalaryFinalization || !e.funding) return;
+      cash += num(e.funding.cash); bank += num(e.funding.bank); admin += num(e.funding.admin);
+    });
+    return { cash: r2(cash), bank: r2(bank), admin: r2(admin) };
+  }
+  function salaryAvailability(mk) {
+    var bal = getOperatingBalances(mk);
+    var ap = appliedSalaryFunding(mk);
+    return { cash: Math.max(0, r2(bal.cash + ap.cash)), bank: Math.max(0, r2(bal.bank + ap.bank)) };
+  }
+
+  function syncSalaryRecords(mk) {
+    if (!appData.expenseLog) appData.expenseLog = [];
+    var d = draft(mk);
+    var rows = salaryRows(mk).filter(function (r) { return r.finalized && num(r.finalizedAmount) > 0; });
     var total = 0;
-    list.forEach(function (s) { total += receivableDue(s); });
-    var rows = list.map(function (s) {
-      var age = Math.max(0, Math.round((Date.parse(mk + '-01') - Date.parse(String(s.date).substring(0, 7) + '-01')) / 2592000000));
+    rows.forEach(function (r) { total += num(r.finalizedAmount); });
+    total = r2(total);
+    var avail = salaryAvailability(mk);
+    var cashAlloc = Math.min(num(d.pay.cash), avail.cash, total);
+    var bankAlloc = Math.min(num(d.pay.bank), avail.bank, Math.max(0, total - cashAlloc));
+    d.pay.cash = r2(cashAlloc);
+    d.pay.bank = r2(bankAlloc);
+
+    var cashLeft = d.pay.cash, bankLeft = d.pay.bank;
+    rows.forEach(function (r) {
+      var amt = r2(r.finalizedAmount);
+      var c = r2(Math.min(cashLeft, amt)); cashLeft = r2(cashLeft - c);
+      var b = r2(Math.min(bankLeft, Math.max(0, amt - c))); bankLeft = r2(bankLeft - b);
+      var a = r2(amt - c - b);
+      var rec = expensesOf(mk).filter(function (e) { return e.isSalaryFinalization && e.salaryStaff === r.name; })[0];
+      if (!rec) {
+        rec = {
+          id: 'EXP_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8),
+          date: dateInMonth(mk), time: getISTTimeStr(), timestamp: Date.now(),
+          category: 'Salary / Salary Advance',
+          desc: 'Salary - ' + r.name + ' (' + mk + ')',
+          staff: currentUser ? currentUser.name : 'Admin',
+          isSalaryFinalization: true, salaryStaff: r.name
+        };
+        appData.expenseLog.unshift(rec);
+      }
+      rec.amount = amt;
+      rec.funding = { cash: c, bank: b, admin: a };
+      rec.payMode = a > 0 ? 'Cash from Admin' : (c > 0 && b > 0 ? 'Split Payment' : (c > 0 ? 'Cash Drawer' : 'Bank/UPI'));
+    });
+
+    /* salary records of staff who are no longer finalised are removed */
+    appData.expenseLog = appData.expenseLog.filter(function (e) {
+      if (!e.isSalaryFinalization) return true;
+      if (String(e.date || '').substring(0, 7) !== mk) return true;
+      return rows.some(function (r) { return r.name === e.salaryStaff; });
+    });
+  }
+
+  window.ftcSalEdit = function (name, field, val) {
+    var mk = wz.month;
+    if (!appData.monthlySalaries) appData.monthlySalaries = {};
+    if (!appData.monthlySalaries[mk]) appData.monthlySalaries[mk] = {};
+    var cfg = appData.monthlySalaries[mk][name] || {};
+    var v = num(val);
+    if (v < 0) v = 0;
+    if (field === 'basic') cfg.basic = r2(v);
+    else { if (v > 100) v = 100; cfg.incentivePct = r2(v); }
+    cfg.finalized = false;
+    delete cfg.finalizedAmount;
+    appData.monthlySalaries[mk][name] = cfg;
+    syncSalaryRecords(mk);
+    saveData();
+    renderWizard();
+  };
+
+  window.ftcSalFinalize = function (name) {
+    var mk = wz.month;
+    var row = null;
+    salaryRows(mk).forEach(function (r) { if (r.name === name) row = r; });
+    if (!row) return;
+    if (!confirm('Finalise the salary of ' + name + ' for ' + monthLabel(mk) + ' ?\n\nBasic: ' + money(row.basic) + '\nIncentive (' + row.incPct + '%): ' + money(row.incentive) + '\nAttendance: ' + money(row.attAdj) + '\nFinal payable: ' + money(row.total))) return;
+    if (!appData.monthlySalaries[mk]) appData.monthlySalaries[mk] = {};
+    appData.monthlySalaries[mk][name] = { basic: row.basic, incentivePct: row.incPct, attAdjustment: row.attAdj, finalized: true, finalizedAmount: r2(row.total) };
+    syncSalaryRecords(mk);
+    saveData();
+    renderWizard();
+  };
+  window.ftcWizardFinalizeSalary = window.ftcSalFinalize;
+
+  window.ftcSalReopen = function (name) {
+    var mk = wz.month;
+    var cfg = (appData.monthlySalaries[mk] || {})[name];
+    if (!cfg) return;
+    cfg.finalized = false;
+    delete cfg.finalizedAmount;
+    syncSalaryRecords(mk);
+    saveData();
+    renderWizard();
+  };
+
+  /* allocation of the payable salary between the business funds */
+  window.ftcAllocPaint = function () {
+    var mk = wz.month;
+    var d = draft(mk);
+    var avail = salaryAvailability(mk);
+    var tot = salaryTotals(mk).total;
+    var cashEl = document.getElementById('ftcPayCash');
+    var bankEl = document.getElementById('ftcPayBank');
+    if (!cashEl || !bankEl) return;
+    var cash = num(cashEl.value), bank = num(bankEl.value);
+    if (cash > avail.cash) cash = avail.cash;
+    if (bank > avail.bank) bank = avail.bank;
+    if (cash + bank > tot) {
+      var over = r2(cash + bank - tot);
+      if (bank >= over) bank = r2(bank - over); else { cash = r2(cash - over); }
+      if (cash < 0) cash = 0; if (bank < 0) bank = 0;
+    }
+    var remaining = r2(Math.max(0, tot - cash - bank));
+    var complete = remaining <= 0.004;
+    var unlocked = complete || (r2(avail.cash - cash) <= 0.004 && r2(avail.bank - bank) <= 0.004);
+
+    var ca = document.getElementById('ftcAvailCash');
+    var ba = document.getElementById('ftcAvailBank');
+    if (ca) ca.innerText = money(Math.max(0, r2(avail.cash - cash)));
+    if (ba) ba.innerText = money(Math.max(0, r2(avail.bank - bank)));
+    var ad = document.getElementById('ftcPayAdmin');
+    if (ad) ad.value = remaining.toFixed(2);
+    var box = document.getElementById('ftcAdminBox');
+    if (box) {
+      box.style.opacity = unlocked ? '1' : '.55';
+      box.style.filter = unlocked ? 'none' : 'grayscale(.4)';
+      box.style.cursor = unlocked ? 'default' : 'not-allowed';
+    }
+    if (ad) ad.disabled = !unlocked;
+    var line = document.getElementById('ftcPayStatus');
+    if (line) {
+      line.innerHTML = complete
+        ? '<i class="fa-solid fa-circle-check" style="color:#059669;"></i> Salary fully allocated &mdash; remaining ' + money(0)
+        : '<i class="fa-solid fa-circle-exclamation" style="color:#e11d48;"></i> Remaining payable: <span style="color:#e11d48;font-weight:900;">' + money(remaining) + '</span>';
+      line.style.color = complete ? '#059669' : '#e11d48';
+    }
+    var lockNote = document.getElementById('ftcAdminLockNote');
+    if (lockNote) lockNote.style.display = unlocked ? 'none' : 'block';
+  };
+
+  window.ftcAllocCommit = function () {
+    var mk = wz.month;
+    var cashEl = document.getElementById('ftcPayCash');
+    var bankEl = document.getElementById('ftcPayBank');
+    if (!cashEl || !bankEl) return;
+    var avail = salaryAvailability(mk);
+    var tot = salaryTotals(mk).total;
+    var cash = Math.min(num(cashEl.value), avail.cash);
+    var bank = Math.min(num(bankEl.value), avail.bank, Math.max(0, tot - cash));
+    var d = draft(mk);
+    d.pay.cash = r2(cash);
+    d.pay.bank = r2(bank);
+    syncSalaryRecords(mk);
+    saveData();
+    renderWizard();
+  };
+
+  window.ftcAdminLockedClick = function (ev) {
+    var ad = document.getElementById('ftcPayAdmin');
+    if (ad && !ad.disabled) return;
+    if (ev && ev.preventDefault) ev.preventDefault();
+    ftcShowNote('Please utilize the available Cash Drawer and Bank/UPI balances completely before using Cash from Admin.', 'ftcAdminBox');
+  };
+
+  window.ftcShowNote = function (msg, anchorId) {
+    var el = document.getElementById('ftcFloatNote');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'ftcFloatNote';
+      el.style.cssText = 'position:fixed;z-index:100050;max-width:290px;background:#fff;border:1px solid #fecaca;border-left:4px solid #e11d48;border-radius:10px;box-shadow:0 18px 40px -16px rgba(15,23,42,.45);padding:11px 32px 11px 12px;font-size:.76rem;font-weight:600;color:#0b1e2d;line-height:1.55;';
+      document.body.appendChild(el);
+    }
+    el.innerHTML = '<button onclick="document.getElementById(\'ftcFloatNote\').style.display=\'none\'" title="Close" style="position:absolute;top:2px;right:2px;background:none;border:0;padding:6px;color:#94a3b8;font-size:.85rem;cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>' + esc(msg);
+    el.style.display = 'block';
+    el.style.left = '12px';
+    el.style.top = '12px';
+    var a = anchorId ? document.getElementById(anchorId) : null;
+    if (a && a.getBoundingClientRect) {
+      var r = a.getBoundingClientRect();
+      var left = Math.min(Math.max(12, r.left), window.innerWidth - 310);
+      var top = r.bottom + 8;
+      if (top + 90 > window.innerHeight) top = Math.max(12, r.top - 96);
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    }
+  };
+
+
+  /* ------------------------------------------------------------- stage one */
+  function stepSummary() {
+    var mk = wz.month;
+    var t = serviceTotals(mk);
+    var due = openReceivables(mk);
+    var dueTotal = 0;
+    due.forEach(function (s) { dueTotal += receivableDue(s); });
+
+    var rows = due.map(function (s) {
       return '<tr>' +
         '<td>' + esc(s.date) + '</td>' +
         '<td>' + esc(s.desc || '') + '</td>' +
         '<td>' + esc(s.receivablePersonName || '\u2014') + '</td>' +
         '<td>' + esc(s.staff || '\u2014') + '</td>' +
-        '<td>' + (age > 0 ? age + ' month(s)' : 'This month') + '</td>' +
         '<td><strong style="color:#7c3aed;">' + money(receivableDue(s)) + '</strong></td>' +
         '<td><button class="btn-primary" style="width:auto;padding:5px 10px;font-size:.72rem;background:#7c3aed;" onclick="ftcOpenSettle(\'' + esc(s.id) + '\', true)">Settle</button></td>' +
         '</tr>';
     });
+
     return '<div class="ftc-wz-panel">' +
-      '<h3>Stage 2 \u00B7 Receivable Settlement</h3>' +
-      '<p class="ftc-wz-hint">Every outstanding receivable must be settled against its original service entry before the closing can continue. Settling records the date, time, mode, amount and remarks on that same entry \u2014 no new service entry is created and the original amount is never changed.</p>' +
+      '<h3>Stage 1 \u00B7 Monthly Service and Receivables Summary</h3>' +
+      '<p class="ftc-wz-hint">Review the service activities, income and receivables recorded during ' + esc(monthLabel(mk)) + '.</p>' +
       '<div class="ftc-wz-grid">' +
-      tile('Outstanding entries', String(list.length), list.length ? '#e11d48' : '#059669') +
-      tile('Outstanding amount', money(total), list.length ? '#e11d48' : '#059669') +
+      tile('Total Service Interactions', String(t.list.length)) +
+      tile('Total Service Charge Collected', money(t.charges)) +
+      tile('Net Service Income', money(t.net), '#059669') +
+      tile('Department Fees Transacted', money(t.dept)) +
+      tile('Receivables Raised', money(t.recv), '#7c3aed') +
       '</div>' +
-      tableHTML(['Entry date', 'Service', 'Customer', 'Recorded by', 'Age', 'Outstanding', 'Action'], rows, 'No receivable is outstanding. Every collection is complete.') +
+      '<h4 style="font-size:.86rem;font-weight:900;margin:18px 0 6px;color:#0b1e2d;">Receivable Settlement</h4>' +
+      '<p class="ftc-wz-hint" style="margin-bottom:10px;">Settle every outstanding receivable against its original service entry. No new service entry is created and the original amount is never changed.</p>' +
+      '<div class="ftc-wz-grid">' +
+      tile('Outstanding Entries', String(due.length), due.length ? '#e11d48' : '#059669') +
+      tile('Outstanding Amount', money(dueTotal), due.length ? '#e11d48' : '#059669') +
+      '</div>' +
+      tableHTML(['Entry Date', 'Service', 'Customer', 'Recorded By', 'Outstanding', 'Action'], rows, 'No receivable is outstanding for this month.') +
       '</div>';
   }
 
-  function stepBook(which) {
+  /* ------------------------------------------------------------- stage two */
+  function stepClosingBalances() {
     var mk = wz.month;
-    var b = bookOf(mk);
-    var rows = (which === 'cash' ? b.cashRows : b.bankRows).map(function (r) {
-      return '<tr><td>' + esc(r.label) + (r.detail ? '<br><span style="color:#94a3b8;font-size:.7rem;">' + esc(r.detail) + '</span>' : '') + '</td>' +
-        '<td style="text-align:right;" class="' + (r.amount < 0 ? 'neg' : 'pos') + '">' + (r.amount < 0 ? '-' : '+') + money(Math.abs(r.amount)) + '</td></tr>';
-    });
-    var closing = which === 'cash' ? b.cash : b.bank;
-    var label = which === 'cash' ? 'Cash Drawer' : 'Bank / UPI';
+    var bal = getOperatingBalances(mk);
+    var neg = bal.cash < -0.004 || bal.bank < -0.004;
     return '<div class="ftc-wz-panel">' +
-      '<h3>Stage ' + (which === 'cash' ? '3' : '4') + ' \u00B7 ' + label + ' Verification</h3>' +
-      '<p class="ftc-wz-hint">Read-only verification of the ' + label + ' balance for ' + esc(monthLabel(mk)) + '. Every movement recorded in the month is listed exactly as the balance engine calculates it.</p>' +
+      '<h3>Stage 2 \u00B7 Closing Cash and Bank Balances</h3>' +
+      '<p class="ftc-wz-hint">Review the available Cash Drawer and Bank/UPI balances before finalizing salaries and expenses.</p>' +
       '<div class="ftc-wz-grid">' +
-      tile('Opening balance', money(which === 'cash' ? b.opening.cash : b.opening.bank)) +
-      tile('Closing balance', money(closing), closing < 0 ? '#e11d48' : '#059669') +
-      tile('Movements', String(rows.length)) +
+      tile('Cash Drawer at Closing', money(bal.cash), bal.cash < 0 ? '#e11d48' : '#059669') +
+      tile('Bank / UPI at Closing', money(bal.bank), bal.bank < 0 ? '#e11d48' : '#2563eb') +
       '</div>' +
-      (closing < 0 ? '<div class="ftc-check bad"><i class="fa-solid fa-triangle-exclamation"></i><div><b>A negative balance was detected</b>A ' + label + ' balance below zero usually means a collection, expense or transfer is missing for this month. Record it before closing.</div></div>' : '') +
-      tableHTML(['Movement', 'Amount'], rows, 'No movement was recorded in this month.') +
+      (neg ? '<div class="ftc-check bad"><i class="fa-solid fa-triangle-exclamation"></i><div><b>A negative balance was detected</b>Record the missing collection, expense or transfer for this month before closing.</div></div>' : '') +
+      '<div class="ftc-check ok"><i class="fa-solid fa-circle-info"></i><div><b>These are the live balances</b>They are calculated from the Cash Book engine using the opening balances of ' + esc(monthLabel(mk)) + ' and every collection, expense and transfer recorded in the month.</div></div>' +
       '</div>';
   }
 
-  function stepSalaries() {
+  /* ----------------------------------------------------------- stage three */
+  function attendanceText(r) {
+    var bits = [];
+    if (r.reason) bits.push(r.reason);
+    return bits.length ? bits.join(' \u00B7 ') : 'Full attendance';
+  }
+
+  function stepExpenseFinalization() {
     var mk = wz.month;
-    var data = salaryRows(mk);
-    var total = 0, pending = 0;
-    data.forEach(function (r) { total += r.finalized ? r.finalizedAmount : r.total; if (!r.finalized && r.total > 0) pending++; });
-    var rows = data.map(function (r) {
+    var st = salaryTotals(mk);
+    var avail = salaryAvailability(mk);
+    var d = draft(mk);
+    var cashAlloc = num(d.pay.cash), bankAlloc = num(d.pay.bank);
+    var adminAlloc = r2(Math.max(0, st.total - cashAlloc - bankAlloc));
+    var remaining = r2(Math.max(0, st.total - cashAlloc - bankAlloc));
+    var complete = remaining <= 0.004;
+    var unlocked = complete || (r2(avail.cash - cashAlloc) <= 0.004 && r2(avail.bank - bankAlloc) <= 0.004);
+
+    var rows = st.rows.map(function (r) {
+      var id = esc(r.name).replace(/'/g, '');
       return '<tr>' +
-        '<td><strong>' + esc(r.name) + '</strong></td>' +
-        '<td>' + money(r.basic) + '</td>' +
-        '<td>' + r.incPct + '%</td>' +
-        '<td>' + money(r.collection) + '</td>' +
-        '<td>' + money(r.incentive) + '</td>' +
-        '<td class="neg">' + money(r.attAdj) + '</td>' +
-        '<td><strong>' + money(r.total) + '</strong></td>' +
-        '<td>' + (r.finalized ? '<span style="color:#059669;font-size:.72rem;font-weight:800;">Finalised</span>'
-          : '<button class="btn-primary" style="width:auto;padding:5px 10px;font-size:.72rem;" onclick="ftcWizardFinalizeSalary(\'' + esc(r.name).replace(/'/g, '') + '\')">Finalise</button>') + '</td>' +
+        '<td><strong>' + esc(r.name) + '</strong>' + (r.finalized ? '<br><span style="color:#059669;font-size:.68rem;font-weight:800;">Finalised</span>' : '') + '</td>' +
+        '<td><input type="number" step="0.01" min="0" value="' + r.basic + '" ' + (r.finalized ? 'disabled' : '') + ' onchange="ftcSalEdit(\'' + id + '\',\'basic\',this.value)" style="width:96px;padding:5px 6px;font-size:.78rem;"></td>' +
+        '<td><input type="number" step="1" min="0" max="100" value="' + r.incPct + '" ' + (r.finalized ? 'disabled' : '') + ' onchange="ftcSalEdit(\'' + id + '\',\'inc\',this.value)" style="width:66px;padding:5px 6px;font-size:.78rem;"></td>' +
+        '<td style="font-size:.72rem;color:#64748b;">' + esc(attendanceText(r)) + '</td>' +
+        '<td>' + money(r.total) + '</td>' +
+        '<td><strong style="color:#0b1e2d;">' + (r.finalized ? money(r.finalizedAmount) : '\u2014') + '</strong></td>' +
+        '<td>' + (r.finalized
+          ? '<button class="btn-secondary" style="width:auto;padding:4px 9px;font-size:.7rem;" onclick="ftcSalReopen(\'' + id + '\')">Reopen</button>'
+          : '<button class="btn-primary" style="width:auto;padding:4px 9px;font-size:.7rem;" onclick="ftcSalFinalize(\'' + id + '\')">Finalise</button>') + '</td>' +
         '</tr>';
     });
+
+    var expRows = expensesOf(mk).filter(function (e) { return e.isClosingExpense; }).sort(function (a, b) { return (b.timestamp || 0) - (a.timestamp || 0); }).map(function (e) {
+      return '<tr><td>' + esc(e.date) + '</td><td>' + esc(e.category) + '</td><td>' + esc(e.desc) + '</td>' +
+        '<td>' + money(e.amount) + '</td><td>' + esc(e.payMode) + '</td>' +
+        '<td><button class="btn-secondary" style="width:auto;padding:4px 9px;font-size:.7rem;color:#e11d48;border-color:#fecaca;" onclick="ftcRemoveClosingExpense(\'' + esc(e.id) + '\')">Remove</button></td></tr>';
+    });
+
+    var bal = getOperatingBalances(mk);
+    var prevExp = shopExpensesTotal(mk);
+    var addExp = additionalExpensesTotal(mk);
+    var totalExp = r2(prevExp + st.total + addExp);
+
     return '<div class="ftc-wz-panel">' +
-      '<h3>Stage 5 \u00B7 Staff Salary Verification</h3>' +
-      '<p class="ftc-wz-hint">Salary, incentive and attendance deductions are calculated exactly as in HR Management. Finalising an employee records the amount as a Salary / Salary Advance expense for the month. Every calculation must be finalised before the month can be locked.</p>' +
-      '<div class="ftc-wz-grid">' +
-      tile('Employees', String(data.length)) +
-      tile('Total payable', money(total)) +
-      tile('Awaiting finalisation', String(pending), pending ? '#e11d48' : '#059669') +
+      '<h3>Stage 3 \u00B7 Expense Finalization</h3>' +
+      '<p class="ftc-wz-hint">Finalize staff salaries and record any additional business expenses before completing the monthly financial summary.</p>' +
+
+      '<h4 style="font-size:.86rem;font-weight:900;margin:6px 0 6px;color:#0b1e2d;">Salary Finalization</h4>' +
+      tableHTML(['Staff Name', 'Basic Salary', 'Incentive %', 'Attendance Details', 'Calculated Salary', 'Final Payable', 'Status'], rows, 'No staff account exists yet.') +
+
+      '<div class="ftc-wz-grid" style="margin-top:14px;">' +
+      tile('Total Payable Salary', money(st.total), '#0b1e2d') +
+      tile('Staff awaiting finalisation', String(st.pending), st.pending ? '#e11d48' : '#059669') +
       '</div>' +
-      tableHTML(['Employee', 'Basic', 'Incentive %', 'Collection', 'Incentive', 'Attendance', 'Payable', 'Status'], rows, 'No staff account exists yet.') +
-      '</div>';
+
+      '<h4 style="font-size:.86rem;font-weight:900;margin:18px 0 6px;color:#0b1e2d;">Salary Payment Allocation</h4>' +
+      '<p class="ftc-wz-hint" style="margin-bottom:10px;">The available Cash Drawer and Bank/UPI balances are reduced instantly while you type. Cash from Admin unlocks only after both business sources are fully used.</p>' +
+      '<div class="ftc-wz-grid">' +
+      '<div class="ftc-wz-tile" style="text-align:center;"><span>Available Cash Drawer</span><strong id="ftcAvailCash" style="color:#059669;">' + money(Math.max(0, r2(avail.cash - cashAlloc))) + '</strong></div>' +
+      '<div class="ftc-wz-tile" style="text-align:center;"><span>Available Bank / UPI</span><strong id="ftcAvailBank" style="color:#2563eb;">' + money(Math.max(0, r2(avail.bank - bankAlloc))) + '</strong></div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:12px;">' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;text-transform:uppercase;">Cash Drawer</label>' +
+      '<input type="number" step="0.01" min="0" id="ftcPayCash" value="' + cashAlloc.toFixed(2) + '" oninput="ftcAllocPaint()" onchange="ftcAllocCommit()" style="width:100%;"></div>' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;text-transform:uppercase;">Bank / UPI</label>' +
+      '<input type="number" step="0.01" min="0" id="ftcPayBank" value="' + bankAlloc.toFixed(2) + '" oninput="ftcAllocPaint()" onchange="ftcAllocCommit()" style="width:100%;"></div>' +
+      '<div id="ftcAdminBox" onclick="ftcAdminLockedClick(event)" style="opacity:' + (unlocked ? '1' : '.55') + ';' + (unlocked ? '' : 'filter:grayscale(.4);') + 'cursor:' + (unlocked ? 'default' : 'not-allowed') + ';">' +
+      '<label style="font-size:.72rem;font-weight:800;color:#64748b;text-transform:uppercase;">Cash from Admin</label>' +
+      '<input type="number" step="0.01" id="ftcPayAdmin" value="' + adminAlloc.toFixed(2) + '" readonly ' + (unlocked ? '' : 'disabled') + ' style="width:100%;background:#f8fafc;">' +
+      '<div id="ftcAdminLockNote" style="display:' + (unlocked ? 'none' : 'block') + ';font-size:.68rem;color:#b45309;font-weight:700;line-height:1.45;margin-top:4px;">Locked until the Cash Drawer and Bank/UPI balances are fully used.</div>' +
+      '</div></div>' +
+      '<div id="ftcPayStatus" style="margin-top:12px;font-size:.82rem;font-weight:800;color:' + (complete ? '#059669' : '#e11d48') + ';">' +
+      (complete ? '<i class="fa-solid fa-circle-check" style="color:#059669;"></i> Salary fully allocated &mdash; remaining ' + money(0)
+        : '<i class="fa-solid fa-circle-exclamation" style="color:#e11d48;"></i> Remaining payable: <span style="color:#e11d48;font-weight:900;">' + money(remaining) + '</span>') + '</div>' +
+
+      '<h4 style="font-size:.86rem;font-weight:900;margin:22px 0 6px;color:#0b1e2d;">Add Additional Expenses</h4>' +
+      '<p class="ftc-wz-hint" style="margin-bottom:10px;">Record any additional business expenses that were not entered earlier in Shop Expenses. Expenses already recorded there are included automatically &mdash; do not enter them again.</p>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;">' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;">Date</label><input type="date" id="ftcExpDate" value="' + dateInMonth(mk) + '" style="width:100%;"></div>' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;">Expense Category</label><select id="ftcExpCat" style="width:100%;">' +
+      ['A4 Paper / Stock Purchase', 'Utility Bill (Electricity/Water)', 'Shop Rent', 'Maintenance & Repairs', 'Miscellaneous Shop Purchase', 'Salary / Salary Advance']
+        .map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('') +
+      '</select></div>' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;">Description</label><input type="text" id="ftcExpDesc" placeholder="What was it for?" style="width:100%;"></div>' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;">Amount Spent</label><input type="number" step="0.01" min="0" id="ftcExpAmt" placeholder="0.00" style="width:100%;"></div>' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;">Deducted From</label><select id="ftcExpSrc" style="width:100%;">' +
+      '<option value="Cash Drawer">Cash Drawer</option><option value="Bank/UPI">Bank / UPI</option><option value="Cash from Admin">Cash from Admin</option>' +
+      '</select></div>' +
+      '</div>' +
+      '<button class="btn-primary" style="width:auto;margin-top:10px;" onclick="ftcAddClosingExpense()"><i class="fa-solid fa-plus"></i> Add expense</button>' +
+      '<div style="font-size:.72rem;color:#94a3b8;margin-top:6px;">Available now &mdash; Cash Drawer ' + money(bal.cash) + ' \u00B7 Bank/UPI ' + money(bal.bank) + '</div>' +
+      tableHTML(['Date', 'Category', 'Description', 'Amount', 'Deducted From', ''], expRows, 'No additional expense has been recorded for this month.') +
+
+      '<h4 style="font-size:.86rem;font-weight:900;margin:20px 0 8px;color:#0b1e2d;">Final Expense Summary</h4>' +
+      '<div class="ftc-wz-grid">' +
+      tile('Total Finalized Staff Salary', money(st.total)) +
+      tile('Previously Recorded Shop Expenses', money(prevExp)) +
+      tile('Additional Expenses Entered During Closing', money(addExp)) +
+      tile('Total Expenses Recorded', money(totalExp), '#e11d48') +
+      '</div></div>';
   }
 
-  window.ftcWizardFinalizeSalary = function (name) {
-    if (!confirm('Finalise the salary of ' + name + ' for ' + monthLabel(wz.month) + '?')) return;
-    finalizeSalary(wz.month, name);
+  window.ftcAddClosingExpense = function () {
+    var mk = wz.month;
+    if (!isAdminUser()) return alert('Only the Business Admin can record closing expenses.');
+    var date = document.getElementById('ftcExpDate').value || dateInMonth(mk);
+    if (date.substring(0, 7) !== mk) date = dateInMonth(mk);
+    var cat = document.getElementById('ftcExpCat').value;
+    var desc = (document.getElementById('ftcExpDesc').value || '').trim();
+    var amt = r2(document.getElementById('ftcExpAmt').value);
+    var src = document.getElementById('ftcExpSrc').value;
+
+    if (!desc) return alert('Enter a description for the expense.');
+    if (!(amt > 0)) return alert('Enter the amount spent.');
+
+    var bal = getOperatingBalances(mk);
+    if (src === 'Cash Drawer' && amt > bal.cash + 0.004) return alert('The Cash Drawer balance is ' + money(bal.cash) + '. A larger amount cannot be deducted.');
+    if (src === 'Bank/UPI' && amt > bal.bank + 0.004) return alert('The Bank/UPI balance is ' + money(bal.bank) + '. A larger amount cannot be deducted.');
+    if (src === 'Cash from Admin' && (bal.cash > 0.005 || bal.bank > 0.005)) {
+      ftcShowNote('Please utilize the available Cash Drawer and Bank/UPI balances completely before using Cash from Admin.', 'ftcExpSrc');
+      return;
+    }
+
+    var funding = src === 'Cash Drawer' ? { cash: amt, bank: 0, admin: 0 }
+      : (src === 'Bank/UPI' ? { cash: 0, bank: amt, admin: 0 } : { cash: 0, bank: 0, admin: amt });
+
+    appData.expenseLog.unshift({
+      id: 'EXP_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8),
+      date: date, time: getISTTimeStr(), timestamp: Date.now(),
+      category: cat, desc: desc, amount: amt, payMode: src,
+      staff: currentUser ? currentUser.name : 'Admin',
+      isClosingExpense: true, closingMonth: mk, funding: funding
+    });
     saveData();
     renderWizard();
   };
 
-  function validationIssues(mk, asList) {
-    var issues = [], checks = [];
+  window.ftcRemoveClosingExpense = function (id) {
+    if (!confirm('Remove this additional expense?')) return;
+    appData.expenseLog = (appData.expenseLog || []).filter(function (e) { return e.id !== id; });
+    saveData();
+    renderWizard();
+  };
 
-    var recv = openReceivables(mk), recvTotal = 0;
-    recv.forEach(function (s) { recvTotal += receivableDue(s); });
-    checks.push({
-      ok: recv.length === 0, title: 'Receivable settlement', step: 2,
-      detail: recv.length === 0 ? 'Every receivable up to this month is settled.'
-        : recv.length + ' receivable(s) totalling ' + money(recvTotal) + ' are still outstanding.'
-    });
-    if (recv.length) issues.push('\u2022 ' + recv.length + ' receivable(s) totalling ' + money(recvTotal) + ' are still outstanding.');
 
-    var sal = salaryRows(mk).filter(function (r) { return r.total > 0 && !r.finalized; });
-    checks.push({
-      ok: sal.length === 0, title: 'Salary calculation', step: 5,
-      detail: sal.length === 0 ? 'All salary calculations are finalised.'
-        : 'Salary is not finalised for: ' + sal.map(function (r) { return r.name; }).join(', ') + '.'
+  /* ------------------------------------------------------------- stage four */
+  function cumulativeBefore(mk) {
+    var prev = 0, cb = appData.cashBook || {}, cl = appData.closedMonths || {};
+    Object.keys(cb).forEach(function (k) { if (k < mk) prev += num(cb[k].net); });
+    Object.keys(cl).forEach(function (k) {
+      if (k >= mk || cb[k]) return;
+      var rec = cl[k] || {};
+      if (rec.cashBook && typeof rec.cashBook.net !== 'undefined') { prev += num(rec.cashBook.net); return; }
+      var tt = rec.totals || {};
+      prev += num(tt.charges) - num(tt.expenses);
     });
-    if (sal.length) issues.push('\u2022 Salary is not finalised for ' + sal.map(function (r) { return r.name; }).join(', ') + '.');
-
-    var sent = 0, got = 0;
-    (appData.adminTransfers || []).forEach(function (at) {
-      if (String(at.date || '').substring(0, 7) !== mk) return;
-      if (at.type === 'TransferToAdmin') sent += num(at.amount);
-      else if (at.type === 'ReceivedFromAdmin') got += num(at.amount);
-    });
-    var adminNet = Math.round((sent - got) * 100) / 100;
-    checks.push({
-      ok: Math.abs(adminNet) <= 0.01, title: 'Admin fund transfer', step: 4,
-      detail: Math.abs(adminNet) <= 0.01 ? 'The admin fund transfer is balanced.' : 'Admin fund transfer net is ' + money(adminNet) + '. It must be settled to zero.'
-    });
-    if (Math.abs(adminNet) > 0.01) issues.push('\u2022 Admin fund transfer net is ' + money(adminNet) + ' and must be settled to zero.');
-
-    var b = bookOf(mk);
-    var negative = b.cash < -0.004 || b.bank < -0.004;
-    checks.push({
-      ok: !negative, title: 'Balance integrity', step: b.cash < -0.004 ? 3 : 4,
-      detail: negative ? 'A negative balance was detected (Cash ' + money(b.cash) + ', Bank ' + money(b.bank) + ').'
-        : 'Cash Drawer and Bank/UPI balances are consistent.'
-    });
-    if (negative) issues.push('\u2022 A negative Cash Drawer or Bank/UPI balance was detected.');
-
-    var prev = prevMonth(mk);
-    var prevHasData = (appData.serviceLog || []).some(function (s) { return String(s.date || '').substring(0, 7) === prev; }) ||
-      (appData.expenseLog || []).some(function (e) { return String(e.date || '').substring(0, 7) === prev; });
-    checks.push({
-      ok: !prevHasData || isClosedMonth(prev), title: 'Previous month', step: 1,
-      detail: (!prevHasData || isClosedMonth(prev)) ? 'The previous month is already closed.'
-        : monthLabel(prev) + ' is still open and must be closed first.'
-    });
-    if (prevHasData && !isClosedMonth(prev)) issues.push('\u2022 ' + monthLabel(prev) + ' must be closed before ' + monthLabel(mk) + '.');
-
-    return asList ? checks : issues;
+    return r2(prev);
   }
 
-  function stepValidation() {
-    var checks = validationIssues(wz.month, true);
-    var bad = checks.filter(function (c) { return !c.ok; }).length;
-    var html = checks.map(function (c) {
-      return '<div class="ftc-check ' + (c.ok ? 'ok' : 'bad') + '">' +
-        '<i class="fa-solid ' + (c.ok ? 'fa-circle-check' : 'fa-circle-exclamation') + '" style="color:' + (c.ok ? '#059669' : '#e11d48') + ';"></i>' +
-        '<div><b>' + esc(c.title) + '</b>' + esc(c.detail) +
-        (c.ok ? '' : ' <button style="background:none;color:#2563eb;font-size:.72rem;font-weight:800;padding:0;text-decoration:underline;" onclick="ftcGotoStep(' + c.step + ')">Open stage ' + c.step + '</button>') +
-        '</div></div>';
-    }).join('');
-    return '<div class="ftc-wz-panel">' +
-      '<h3>Stage 6 \u00B7 Final Validation</h3>' +
-      '<p class="ftc-wz-hint">The system verifies its own records. Nothing is taken on trust: a single failed check blocks the closing.</p>' +
-      '<div class="ftc-wz-grid">' +
-      tile('Checks passed', String(checks.length - bad), bad ? '#0b1e2d' : '#059669') +
-      tile('Checks failed', String(bad), bad ? '#e11d48' : '#059669') +
-      '</div>' + html + '</div>';
+  function cashBookTotals(mk) {
+    var t = serviceTotals(mk);
+    var st = salaryTotals(mk);
+    var shop = shopExpensesTotal(mk);
+    var add = additionalExpensesTotal(mk);
+    var expenses = r2(shop + st.total + add);
+    var funded = adminFundedOf(mk);
+    var net = r2(t.charges - expenses + funded);
+    return { charges: t.charges, shop: shop, salary: st.total, additional: add, expenses: expenses, adminFunded: funded, net: net, cumulative: r2(cumulativeBefore(mk) + net), saved: !!((appData.cashBook || {})[mk]) };
   }
 
-  window.ftcGotoStep = function (n) { wz.step = n; renderWizard(); };
-
-  function stepLock() {
+  function stageCashBook() {
     var mk = wz.month;
-    var b = bookOf(mk);
-    var recs = openReceivables(mk).length;
-    var salPending = salaryRows(mk).filter(function (r) { return r.total > 0 && !r.finalized; }).length;
-    var ready = !recs && !salPending;
+    var cb = cashBookTotals(mk);
+    var savedRec = (appData.cashBook || {})[mk];
+    var outstanding = r2(adminFundOutstandingBefore(mk) + adminFundedOf(mk) - repaidOf(mk));
+    var bal = getOperatingBalances(mk);
     return '<div class="ftc-wz-panel">' +
-      '<h3>Stage 7 \u00B7 Lock ' + esc(monthLabel(mk)) + '</h3>' +
-      '<p class="ftc-wz-hint">Closing the month locks every record of ' + esc(monthLabel(mk)) + '. No service entry, expense, transfer, invoice, salary figure or settlement can be added, edited or deleted afterwards. Cash Drawer and Bank/UPI balances are transferred to the administrator and reset to zero; receivables remain on record.</p>' +
+      '<h3>Stage 4 \u00B7 Cash Book Monthly Summary</h3>' +
+      '<p class="ftc-wz-hint">The monthly summary is generated automatically from the records of ' + esc(monthLabel(mk)) + '. Saving it never creates a new transaction &mdash; it only stores the summary for this month.</p>' +
       '<div class="ftc-wz-grid">' +
-      tile('Cash Drawer to transfer', money(b.cash)) +
-      tile('Bank / UPI to transfer', money(b.bank)) +
-      tile('Receivables remaining', money(b.credit), recs ? '#7c3aed' : '#059669') +
+      tile('Month', esc(monthLabel(mk))) +
+      tile('Total Service Charge Collected', money(cb.charges), '#059669') +
+      tile('Total Expenses Recorded', money(cb.expenses), '#e11d48') +
+      tile('Additional Amount Funded by Administrator', money(cb.adminFunded), '#b45309') +
+      tile('Net Balance for the Month', money(cb.net), cb.net < 0 ? '#e11d48' : '#059669') +
+      tile('Cumulative Profit / Balance', money(cb.cumulative), cb.cumulative < 0 ? '#e11d48' : '#2563eb') +
       '</div>' +
-      '<div class="ftc-check ' + (ready ? 'ok' : 'bad') + '">' +
-      '<i class="fa-solid fa-triangle-exclamation" style="color:' + (ready ? '#059669' : '#e11d48') + ';"></i>' +
-      '<div><b>' + (ready ? 'Everything is ready' : 'The closing cannot continue yet') + '</b>' +
-      (ready ? 'Press Close ' + esc(monthLabel(mk)) + ' to lock the month. A closing record is written and the closing report stays available.'
-        : 'Return to stage 2 for the outstanding receivables or stage 5 for the pending salary calculations.') +
-      '</div></div></div>';
-  }
-
-  function reportHTML(mk, rec) {
-    var t = rec.totals || {};
-    function row(label, value) {
-      return '<tr><td style="padding:7px 10px;border-top:1px solid #eef2f7;">' + esc(label) + '</td>' +
-        '<td style="padding:7px 10px;border-top:1px solid #eef2f7;text-align:right;font-weight:800;">' + value + '</td></tr>';
-    }
-    var staffRows = (rec.salaries || []).map(function (s) {
-      return '<tr><td style="padding:6px 10px;border-top:1px solid #eef2f7;">' + esc(s.name) + '</td>' +
-        '<td style="padding:6px 10px;border-top:1px solid #eef2f7;text-align:right;">' + money(s.finalizedAmount || s.total) + '</td></tr>';
-    }).join('');
-    return '<div style="border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fff;">' +
-      '<div style="background:#0b1e2d;color:#fff;padding:14px 16px;">' +
-      '<div style="font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;opacity:.75;">Monthly Closing Report</div>' +
-      '<div style="font-size:1.05rem;font-weight:900;">' + esc(monthLabel(mk)) + '</div></div>' +
-      '<div style="padding:14px 16px;font-size:.8rem;line-height:1.7;color:#334155;">' +
-      '<div><strong>Closing type:</strong> ' + esc(rec.closingType || 'Manual Month-End Closing') + '</div>' +
-      '<div><strong>Closed by:</strong> ' + esc(rec.closedBy || '\u2014') + ' (' + esc(rec.closedRole || 'Admin') + ')</div>' +
-      '<div><strong>Closed on:</strong> ' + esc(rec.closedDate || '') + ' at ' + esc(rec.closedTime || '') + ' IST</div></div>' +
-      '<table style="width:100%;border-collapse:collapse;font-size:.8rem;">' +
-      row('Service interactions', String(t.interactions || 0)) +
-      row('Service charges collected', money(t.charges)) +
-      row('Net service income', money(t.net)) +
-      row('Department fees transacted', money(t.deptFees)) +
-      row('Receivables raised', money(t.receivablesRaised)) +
-      row('Receivables settled', money(t.receivablesSettled)) +
-      row('Receivables still outstanding', money(t.receivablesOutstanding)) +
-      row('Cash Drawer at closing', money(t.cashClosing)) +
-      row('Bank / UPI at closing', money(t.bankClosing)) +
-      row('Expenses recorded', money(t.expenses)) +
-      row('Salary finalised', money(t.salary)) +
-      row('Transferred to administrator', money(t.transferred)) +
-      '</table>' +
-      (staffRows ? '<div style="padding:12px 16px 4px;font-size:.72rem;font-weight:800;text-transform:uppercase;color:#64748b;">Staff salaries</div><table style="width:100%;border-collapse:collapse;font-size:.8rem;">' + staffRows + '</table>' : '') +
-      (rec.remarks ? '<div style="padding:12px 16px;font-size:.8rem;color:#334155;"><strong>Remarks:</strong> ' + esc(rec.remarks) + '</div>' : '') +
+      '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px;">' +
+      '<button class="btn-primary" style="width:auto;" onclick="ftcSaveCashBook()"><i class="fa-solid fa-floppy-disk"></i> ' + (cb.saved ? 'Update saved summary' : 'Save monthly summary') + '</button>' +
+      (cb.saved ? '<span style="font-size:.76rem;font-weight:800;color:#059669;"><i class="fa-solid fa-circle-check"></i> Saved ' + esc(savedRec.savedDate || '') + ' ' + esc(savedRec.savedTime || '') + '</span>' : '<span style="font-size:.76rem;font-weight:700;color:#94a3b8;">Not saved yet</span>') +
+      '</div>' +
+      '<h4 style="font-size:.86rem;font-weight:900;margin:20px 0 6px;color:#0b1e2d;">Administrator Fund Repayment <span style="font-weight:700;color:#94a3b8;font-size:.74rem;">(optional)</span></h4>' +
+      '<p class="ftc-wz-hint" style="margin-bottom:8px;">Outstanding administrator funding: <strong style="color:#b45309;">' + money(outstanding) + '</strong>. Repay only when the administrator decides to recover the funded amount.</p>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;">' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;">Amount to repay</label><input type="number" step="0.01" min="0" id="ftcRepayAmt" placeholder="0.00" style="width:100%;" ' + (outstanding > 0 ? '' : 'disabled') + '></div>' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;">Paid from</label><select id="ftcRepaySrc" style="width:100%;" ' + (outstanding > 0 ? '' : 'disabled') + '><option value="Cash Drawer">Cash Drawer</option><option value="Bank/UPI">Bank / UPI</option></select></div>' +
+      '<div style="display:flex;align-items:flex-end;"><button class="btn-secondary" style="width:100%;" onclick="ftcRepayAdmin()" ' + (outstanding > 0 ? '' : 'disabled') + '><i class="fa-solid fa-rotate-left"></i> Record repayment</button></div>' +
+      '</div>' +
+      '<div style="font-size:.72rem;color:#94a3b8;margin-top:6px;">Available now &mdash; Cash Drawer ' + money(bal.cash) + ' \u00B7 Bank/UPI ' + money(bal.bank) + '</div>' +
       '</div>';
   }
 
-  function stepReport() {
+  window.ftcSaveCashBook = function () {
     var mk = wz.month;
-    var rec = closingRecord(mk);
-    if (!rec) {
-      return '<div class="ftc-wz-panel"><h3>Stage 8 \u00B7 Closing Report</h3>' +
-        '<p class="ftc-wz-hint">No closing record exists for ' + esc(monthLabel(mk)) + ' yet. Complete stages 1 to 7 to create it.</p></div>';
+    var cb = cashBookTotals(mk);
+    if (!appData.cashBook) appData.cashBook = {};
+    appData.cashBook[mk] = {
+      month: mk, monthLabel: monthLabel(mk),
+      charges: cb.charges, salary: cb.salary, shop: cb.shop, additional: cb.additional,
+      expenses: cb.expenses, adminFunded: cb.adminFunded, net: cb.net, cumulative: cb.cumulative,
+      savedDate: getISTDateStr(), savedTime: getISTTimeStr(),
+      savedBy: currentUser ? currentUser.name : 'Admin'
+    };
+    saveData();
+    renderWizard();
+  };
+
+  window.ftcRepayAdmin = function () {
+    var mk = wz.month;
+    var amt = r2((document.getElementById('ftcRepayAmt') || {}).value);
+    var src = (document.getElementById('ftcRepaySrc') || {}).value || 'Cash Drawer';
+    var outstanding = r2(adminFundOutstandingBefore(mk) + adminFundedOf(mk) - repaidOf(mk));
+    var bal = getOperatingBalances(mk);
+    if (!(amt > 0)) return alert('Enter the amount to repay.');
+    if (amt > outstanding + 0.004) return alert('The maximum repayable amount is ' + money(outstanding) + '.');
+    if (src === 'Cash Drawer' && amt > bal.cash + 0.004) return alert('The Cash Drawer balance is ' + money(bal.cash) + '.');
+    if (src === 'Bank/UPI' && amt > bal.bank + 0.004) return alert('The Bank/UPI balance is ' + money(bal.bank) + '.');
+    if (!appData.adminFundRepayments) appData.adminFundRepayments = [];
+    appData.adminFundRepayments.push({
+      id: 'AFR_' + Date.now(), month: mk, date: dateInMonth(mk), time: getISTTimeStr(),
+      amount: amt, source: src, by: currentUser ? currentUser.name : 'Admin'
+    });
+    syncSalaryRecords(mk);
+    saveData();
+    renderWizard();
+  };
+
+  /* ------------------------------------------------------------- stage five */
+  function monthTransfers(mk) {
+    var cash = 0, bank = 0;
+    (appData.adminTransfers || []).forEach(function (at) {
+      if (String(at.date || '').substring(0, 7) !== mk) return;
+      if (at.type !== 'TransferToAdmin') return;
+      if ((at.source || 'Bank/UPI') === 'Cash Drawer') cash += num(at.amount); else bank += num(at.amount);
+    });
+    return { cash: r2(cash), bank: r2(bank), any: (cash + bank) > 0.004 };
+  }
+
+  function stageTransfer() {
+    var mk = wz.month;
+    var bal = getOperatingBalances(mk);
+    var done = monthTransfers(mk);
+    var d = draft(mk);
+    if (done.any) {
+      return '<div class="ftc-wz-panel">' +
+        '<h3>Stage 5 \u00B7 Transfer to Administrator</h3>' +
+        '<p class="ftc-wz-hint">The transfer for ' + esc(monthLabel(mk)) + ' has already been recorded. The business balances were reduced at the moment of transfer.</p>' +
+        '<div class="ftc-wz-grid">' +
+        tile('Transferred from Cash Drawer', money(done.cash)) +
+        tile('Transferred from Bank / UPI', money(done.bank)) +
+        tile('Cash Drawer after transfer', money(bal.cash), '#059669') +
+        tile('Bank / UPI after transfer', money(bal.bank), '#2563eb') +
+        '</div>' +
+        '<div class="ftc-check ok"><i class="fa-solid fa-circle-check"></i><div><b>Recorded once</b>No duplicate transfer can be created for this month.</div></div>' +
+        '</div>';
     }
     return '<div class="ftc-wz-panel">' +
-      '<h3>Stage 8 \u00B7 Closing Report \u00B7 ' + esc(monthLabel(mk)) + '</h3>' +
-      '<p class="ftc-wz-hint">This report is stored with the closing record and remains available for future reference.</p>' +
-      reportHTML(mk, rec) +
-      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;">' +
-      '<button class="btn-primary" style="width:auto;" onclick="ftcPrintReport()"><i class="fa-solid fa-print"></i> Print / Save as PDF</button>' +
-      '</div></div>';
+      '<h3>Stage 5 \u00B7 Transfer to Administrator</h3>' +
+      '<p class="ftc-wz-hint">Transfer the remaining business balances to the administrator. Both balances are reduced instantly when the transfer is confirmed. This step is optional &mdash; leave it empty to carry the balances forward.</p>' +
+      '<div class="ftc-wz-grid">' +
+      '<div class="ftc-wz-tile" style="text-align:center;"><span>Available Cash Drawer</span><strong id="ftcTrAvailCash" style="color:#059669;">' + money(bal.cash) + '</strong></div>' +
+      '<div class="ftc-wz-tile" style="text-align:center;"><span>Available Bank / UPI</span><strong id="ftcTrAvailBank" style="color:#2563eb;">' + money(bal.bank) + '</strong></div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:12px;">' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;text-transform:uppercase;">Transfer from Cash Drawer</label>' +
+      '<input type="number" step="0.01" min="0" id="ftcTrCash" value="' + num(d.transfer.cash).toFixed(2) + '" oninput="ftcTransferPaint()" onchange="ftcTransferCommit()" style="width:100%;"></div>' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;text-transform:uppercase;">Transfer from Bank / UPI</label>' +
+      '<input type="number" step="0.01" min="0" id="ftcTrBank" value="' + num(d.transfer.bank).toFixed(2) + '" oninput="ftcTransferPaint()" onchange="ftcTransferCommit()" style="width:100%;"></div>' +
+      '</div>' +
+      '<div style="margin-top:12px;"><button class="btn-primary" style="width:auto;background:var(--atmos-navy);" onclick="ftcConfirmTransfer()"><i class="fa-solid fa-arrow-right-arrow-left"></i> Confirm transfer to administrator</button></div>' +
+      '</div>';
+  }
+
+  window.ftcTransferPaint = function () {
+    var mk = wz.month;
+    var bal = getOperatingBalances(mk);
+    var c = num((document.getElementById('ftcTrCash') || {}).value);
+    var b = num((document.getElementById('ftcTrBank') || {}).value);
+    var ca = document.getElementById('ftcTrAvailCash'), ba = document.getElementById('ftcTrAvailBank');
+    if (ca) ca.innerText = money(Math.max(0, r2(bal.cash - c)));
+    if (ba) ba.innerText = money(Math.max(0, r2(bal.bank - b)));
+  };
+
+  window.ftcTransferCommit = function () {
+    var mk = wz.month;
+    var bal = getOperatingBalances(mk);
+    var d = draft(mk);
+    var c = Math.min(Math.max(0, num((document.getElementById('ftcTrCash') || {}).value)), Math.max(0, bal.cash));
+    var b = Math.min(Math.max(0, num((document.getElementById('ftcTrBank') || {}).value)), Math.max(0, bal.bank));
+    d.transfer = { cash: r2(c), bank: r2(b), confirmed: false };
+    saveData();
+    renderWizard();
+  };
+
+  window.ftcConfirmTransfer = function () {
+    var mk = wz.month;
+    var d = draft(mk);
+    var bal = getOperatingBalances(mk);
+    var c = Math.min(Math.max(0, num(d.transfer.cash)), Math.max(0, bal.cash));
+    var b = Math.min(Math.max(0, num(d.transfer.bank)), Math.max(0, bal.bank));
+    if (c <= 0.004 && b <= 0.004) return alert('Enter the amount to transfer, or leave this stage to carry the balances forward.');
+    if (!confirm('Transfer to the administrator?\n\nCash Drawer: ' + money(c) + '\nBank/UPI: ' + money(b) + '\n\nThe balances are reduced immediately and cannot be transferred twice.')) return;
+    if (!appData.adminTransfers) appData.adminTransfers = [];
+    var stamp = Date.now();
+    if (c > 0.004) appData.adminTransfers.push({ id: 'AT_' + stamp + '_c', date: dateInMonth(mk), time: getISTTimeStr(), type: 'TransferToAdmin', source: 'Cash Drawer', amount: r2(c), note: 'Month-end closing transfer (' + monthLabel(mk) + ')', by: currentUser ? currentUser.name : 'Admin' });
+    if (b > 0.004) appData.adminTransfers.push({ id: 'AT_' + stamp + '_b', date: dateInMonth(mk), time: getISTTimeStr(), type: 'TransferToAdmin', source: 'Bank/UPI', amount: r2(b), note: 'Month-end closing transfer (' + monthLabel(mk) + ')', by: currentUser ? currentUser.name : 'Admin' });
+    d.transfer = { cash: 0, bank: 0, confirmed: true };
+    saveData();
+    renderWizard();
+  };
+
+  /* -------------------------------------------------------------- stage six */
+  function stageOpening() {
+    var mk = wz.month;
+    var nx = nextMonth(mk);
+    var bal = getOperatingBalances(mk);
+    var d = draft(mk);
+    var op = d.opening && d.opening.set ? d.opening : { cash: r2(Math.max(0, bal.cash)), bank: r2(Math.max(0, bal.bank)), set: false };
+    var existing = (appData.openingBalances || {})[nx];
+    return '<div class="ftc-wz-panel">' +
+      '<h3>Stage 6 \u00B7 Opening Balances for ' + esc(monthLabel(nx)) + '</h3>' +
+      '<p class="ftc-wz-hint">These values are saved as the exact opening balances of ' + esc(monthLabel(nx)) + '. They are never rounded and never reset to zero.</p>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;">' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;text-transform:uppercase;">Opening Cash Drawer</label><input type="number" step="0.01" id="ftcOpCash" value="' + num(op.cash).toFixed(2) + '" style="width:100%;"></div>' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;text-transform:uppercase;">Opening Bank / UPI</label><input type="number" step="0.01" id="ftcOpBank" value="' + num(op.bank).toFixed(2) + '" style="width:100%;"></div>' +
+      '<div><label style="font-size:.72rem;font-weight:800;color:#64748b;text-transform:uppercase;">Opening Receivables</label><input type="number" value="0.00" readonly disabled style="width:100%;background:#f8fafc;"></div>' +
+      '</div>' +
+      '<div style="margin-top:12px;"><button class="btn-primary" style="width:auto;" onclick="ftcConfirmOpening()"><i class="fa-solid fa-check"></i> ' + (op.set ? 'Update opening balances' : 'Confirm opening balances') + '</button>' +
+      (op.set ? '<span style="font-size:.76rem;font-weight:800;color:#059669;margin-left:10px;"><i class="fa-solid fa-circle-check"></i> Confirmed</span>' : '') + '</div>' +
+      (existing ? '<div style="font-size:.74rem;color:#b45309;font-weight:700;margin-top:8px;">Saved currently: Cash ' + money(existing.cash) + ' \u00B7 Bank ' + money(existing.bank) + '. Confirming replaces it.</div>' : '') +
+      '<h4 style="font-size:.86rem;font-weight:900;margin:20px 0 6px;color:#0b1e2d;">Staff permission for opening balance modification</h4>' +
+      '<p class="ftc-wz-hint" style="margin-bottom:8px;">Off by default. Only the Business Admin can change opening balances unless this permission is granted.</p>' +
+      '<div class="ftc-check ' + (appData.staffBalanceEditAccess === true ? 'bad' : 'ok') + '"><i class="fa-solid ' + (appData.staffBalanceEditAccess === true ? 'fa-unlock' : 'fa-lock') + '"></i><div><b>' + (appData.staffBalanceEditAccess === true ? 'Permission granted to staff' : 'Permission off') + '</b>' +
+      '<button class="btn-secondary" style="width:auto;padding:5px 10px;font-size:.72rem;margin-top:6px;" onclick="ftcToggleStaffBalanceAccess()">' + (appData.staffBalanceEditAccess === true ? 'Turn permission off' : 'Grant permission') + '</button></div></div>' +
+      '</div>';
+  }
+
+  window.ftcToggleStaffBalanceAccess = function () {
+    appData.staffBalanceEditAccess = appData.staffBalanceEditAccess === true ? false : true;
+    saveData();
+    renderWizard();
+  };
+
+  window.ftcConfirmOpening = function () {
+    var mk = wz.month;
+    var d = draft(mk);
+    var c = num((document.getElementById('ftcOpCash') || {}).value);
+    var b = num((document.getElementById('ftcOpBank') || {}).value);
+    if (c < 0 || b < 0) return alert('Opening balances cannot be negative.');
+    d.opening = { cash: r2(c), bank: r2(b), set: true };
+    saveData();
+    renderWizard();
+  };
+
+
+  /* ------------------------------------------------------------ stage seven */
+  function closingData(mk) {
+    var t = serviceTotals(mk);
+    var st = salaryTotals(mk);
+    var bal = getOperatingBalances(mk);
+    var shop = shopExpensesTotal(mk);
+    var addList = expensesOf(mk).filter(function (e) { return e.isClosingExpense; });
+    var add = additionalExpensesTotal(mk);
+    var expenses = r2(shop + st.total + add);
+    var funded = adminFundedOf(mk);
+    var repaid = repaidOf(mk);
+    var prevOut = adminFundOutstandingBefore(mk);
+    var due = openReceivables(mk);
+    var dueTotal = 0;
+    due.forEach(function (s) { dueTotal += receivableDue(s); });
+    var nextMk = nextMonth(mk);
+    var d = draft(mk);
+    var tr = monthTransfers(mk);
+    var op = d.opening && d.opening.set ? d.opening : { cash: r2(Math.max(0, bal.cash)), bank: r2(Math.max(0, bal.bank)) };
+    return {
+      interactions: t.list.length,
+      charges: t.charges, discount: t.discount, dept: t.dept, recv: t.recv, netService: t.net,
+      cashAtClosing: r2(bal.cash), bankAtClosing: r2(bal.bank),
+      salaryTotal: st.total,
+      salaries: st.rows.filter(function (r) { return r.finalized; }).map(function (r) {
+        return { name: r.name, basic: r.basic, incentivePct: r.incPct, incentive: r.incentive, attAdjustment: r.attAdj, payable: r.finalizedAmount };
+      }),
+      shopExpenses: shop,
+      additionalExpenses: addList.map(function (e) { return { date: e.date, category: e.category, desc: e.desc, amount: num(e.amount), source: e.payMode }; }),
+      additionalTotal: add,
+      expensesTotal: expenses,
+      adminFunded: funded, adminRepaid: repaid,
+      adminFund: { previous: prevOut, funded: funded, repaid: repaid, outstanding: r2(prevOut + funded - repaid) },
+      chargesNet: t.charges,
+      net: r2(t.charges - expenses + funded),
+      cumulative: r2(cumulativeBefore(mk) + (t.charges - expenses + funded)),
+      transfer: { cash: tr.cash, bank: tr.bank },
+      opening: { cash: r2(op.cash), bank: r2(op.bank), credit: 0 },
+      nextMonth: nextMk,
+      receivables: { count: due.length, amount: r2(dueTotal) },
+      cashBookSaved: !!((appData.cashBook || {})[mk])
+    };
+  }
+
+  function letterheadHTML() {
+    var b = {};
+    try { b = ftBizBrand() || {}; } catch (e) { b = {}; }
+    var name = b.name || (appData.businessProfile && appData.businessProfile.name) || 'Business';
+    var motto = b.motto || (appData.businessProfile && appData.businessProfile.motto) || '';
+    var logo = b.logo || appData.logoDataUrl || '';
+    return '<div style="display:flex;align-items:center;gap:14px;border-bottom:3px solid #0b1e2d;padding-bottom:12px;margin-bottom:16px;">' +
+      (logo ? '<img src="' + logo + '" style="height:56px;max-width:140px;object-fit:contain;">' : '') +
+      '<div><div style="font-size:1.15rem;font-weight:900;color:#0b1e2d;letter-spacing:.2px;">' + esc(name) + '</div>' +
+      (motto ? '<div style="font-size:.74rem;color:#64748b;font-weight:600;">' + esc(motto) + '</div>' : '') +
+      '<div style="font-size:.7rem;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.08em;">Monthly Closing Statement</div></div></div>';
+  }
+
+  function repLine(label, value, opts) {
+    opts = opts || {};
+    return '<div style="display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px dashed #e2e8f0;font-size:.8rem;">' +
+      '<span style="color:#475569;font-weight:600;">' + label + '</span>' +
+      '<span style="color:' + (opts.color || '#0b1e2d') + ';font-weight:' + (opts.strong === false ? '600' : '900') + ';">' + value + '</span></div>';
+  }
+  function repSection(num, title, body) {
+    return '<div style="margin-bottom:16px;">' +
+      '<div style="font-size:.74rem;font-weight:900;text-transform:uppercase;letter-spacing:.09em;color:#0b1e2d;background:#f1f5f9;border-left:4px solid #0b1e2d;padding:7px 10px;margin-bottom:8px;">' + num + '. ' + esc(title) + '</div>' +
+      '<div style="padding:0 4px;">' + body + '</div></div>';
+  }
+
+  function reportBodyHTML(mk, data) {
+    var b = {};
+    try { b = ftBizBrand() || {}; } catch (e) { b = {}; }
+    var name = b.name || (appData.businessProfile && appData.businessProfile.name) || 'Business';
+    var salRows = data.salaries.map(function (s) {
+      return '<tr><td style="padding:5px 6px;border-bottom:1px solid #eef2f7;">' + esc(s.name) + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eef2f7;text-align:right;">' + money(s.basic) + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eef2f7;text-align:right;">' + s.incentivePct + '%</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eef2f7;text-align:right;">' + money(s.incentive) + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eef2f7;text-align:right;">' + money(s.attAdjustment) + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eef2f7;text-align:right;font-weight:900;">' + money(s.payable) + '</td></tr>';
+    }).join('');
+    var addRows = data.additionalExpenses.map(function (e) {
+      return '<tr><td style="padding:5px 6px;border-bottom:1px solid #eef2f7;">' + esc(e.date) + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eef2f7;">' + esc(e.category) + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eef2f7;">' + esc(e.desc) + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eef2f7;">' + esc(e.source) + '</td>' +
+        '<td style="padding:5px 6px;border-bottom:1px solid #eef2f7;text-align:right;">' + money(e.amount) + '</td></tr>';
+    }).join('');
+    var tblHead = 'style="width:100%;border-collapse:collapse;font-size:.75rem;"';
+
+    return repSection(1, 'Business Information',
+      repLine('Business name', esc(name)) +
+      repLine('Financial month closed', esc(monthLabel(mk))) +
+      repLine('Closing date', getISTDateStr()) +
+      repLine('Closed by', esc((currentUser && currentUser.name) || 'Administrator')) +
+      repLine('Closing type', isClosedMonth(mk) ? 'Re-verification run' : 'Manual Month-End Closing')) +
+      repSection(2, 'Monthly Service and Receivables Summary',
+        repLine('Total service interactions', String(data.interactions)) +
+        repLine('Total service charge collected', money(data.charges)) +
+        repLine('Net service income', money(data.netService), { color: '#059669' }) +
+        repLine('Department fees transacted', money(data.dept)) +
+        repLine('Receivables raised', money(data.recv), { color: '#7c3aed' }) +
+        repLine('Receivables outstanding after settlement', money(data.receivables.amount), { color: data.receivables.amount > 0 ? '#e11d48' : '#059669' })) +
+      repSection(3, 'Salary Finalization Summary',
+        (salRows ? '<table ' + tblHead + '><thead><tr>' +
+          ['Staff', 'Basic', 'Inc.%', 'Incentive', 'Attendance', 'Payable'].map(function (h, i) {
+            return '<th style="text-align:left;padding:5px 6px;background:#f8fafc;font-size:.68rem;text-transform:uppercase;color:#64748b;' + (i ? 'text-align:right;' : '') + '">' + h + '</th>';
+          }).join('') + '</tr></thead><tbody>' + salRows + '</tbody></table>' : '<div style="font-size:.78rem;color:#94a3b8;">No salary was finalised for this month.</div>') +
+        repLine('Total payable salary', money(data.salaryTotal))) +
+      repSection(4, 'Expense Summary',
+        repLine('Previously recorded shop expenses', money(data.shopExpenses)) +
+        repLine('Additional expenses entered during closing', money(data.additionalTotal)) +
+        repLine('Finalized staff salary', money(data.salaryTotal)) +
+        repLine('Total expenses recorded', money(data.expensesTotal), { color: '#e11d48' }) +
+        (addRows ? '<table ' + tblHead + ' style="margin-top:8px;"><thead><tr>' +
+          ['Date', 'Category', 'Description', 'Deducted from', 'Amount'].map(function (h) {
+            return '<th style="text-align:left;padding:5px 6px;background:#f8fafc;font-size:.68rem;text-transform:uppercase;color:#64748b;">' + h + '</th>';
+          }).join('') + '</tr></thead><tbody>' + addRows + '</tbody></table>' : '')) +
+      repSection(5, 'Cash Flow Summary',
+        repLine('Cash Drawer at closing', money(data.cashAtClosing), { color: data.cashAtClosing < 0 ? '#e11d48' : '#059669' }) +
+        repLine('Bank / UPI at closing', money(data.bankAtClosing), { color: data.bankAtClosing < 0 ? '#e11d48' : '#2563eb' }) +
+        repLine('Total cash and bank at closing', money(r2(data.cashAtClosing + data.bankAtClosing)))) +
+      repSection(6, 'Cash Book Summary',
+        repLine('Total service charge collected', money(data.chargesNet)) +
+        repLine('Total expenses recorded', money(data.expensesTotal)) +
+        repLine('Additional amount funded by administrator', money(data.adminFunded), { color: '#b45309' }) +
+        repLine('Net balance for the month', money(data.net), { color: data.net < 0 ? '#e11d48' : '#059669' }) +
+        repLine('Cumulative profit / balance', money(data.cumulative), { color: data.cumulative < 0 ? '#e11d48' : '#2563eb' })) +
+      repSection(7, 'Transfer to Administrator',
+        repLine('Transferred from Cash Drawer', money(data.transfer.cash)) +
+        repLine('Transferred from Bank / UPI', money(data.transfer.bank)) +
+        repLine('Total transferred', money(r2(data.transfer.cash + data.transfer.bank)))) +
+      repSection(8, 'Administrator Fund Outstanding',
+        repLine('Outstanding at the start of the month', money(data.adminFund.previous)) +
+        repLine('Additional amount funded during the month', money(data.adminFund.funded), { color: '#b45309' }) +
+        repLine('Repaid during the month', money(data.adminFund.repaid), { color: '#059669' }) +
+        repLine('Closing outstanding balance', money(data.adminFund.outstanding), { color: '#b45309' })) +
+      repSection(9, 'Opening Balance for ' + monthLabel(data.nextMonth),
+        repLine('Opening Cash Drawer', money(data.opening.cash), { color: '#059669' }) +
+        repLine('Opening Bank / UPI', money(data.opening.bank), { color: '#2563eb' }) +
+        repLine('Opening receivables', money(0), { color: '#7c3aed' })) +
+      repSection(10, 'Closing Information',
+        repLine('Closed by', esc((currentUser && currentUser.name) || 'Administrator')) +
+        repLine('Closing date', getISTDateStr()) +
+        repLine('Closing time', getISTTimeStr()) +
+        repLine('Status', isClosedMonth(mk) ? 'Already closed &mdash; verification run' : 'Locked after submission', { color: '#e11d48' }));
+  }
+
+  function stageReport() {
+    var mk = wz.month;
+    var data = closingData(mk);
+    var closedNow = isClosedMonth(mk);
+    var rec = closedNow ? closingRecord(mk) : null;
+    var issues = validationIssues(mk);
+    return '<div class="ftc-wz-panel">' +
+      '<h3>Stage 7 \u00B7 Monthly Closing Report</h3>' +
+      '<p class="ftc-wz-hint">Final review before the month is locked. Nothing is posted, deducted or transferred at this point &mdash; the month was already updated stage by stage.</p>' +
+      (closedNow ? '<div class="ftc-check ok"><i class="fa-solid fa-lock"></i><div><b>' + esc(monthLabel(mk)) + ' is already closed</b>This run only verifies the flow. October records and the current month\'s opening balances stay exactly as they are.</div></div>' : '') +
+      '<div id="ftcReportSheet" style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:18px;max-height:52vh;overflow-y:auto;">' +
+      letterheadHTML() + reportBodyHTML(mk, data) + '</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">' +
+      '<button class="btn-secondary" style="width:auto;" onclick="ftcPrintReport()"><i class="fa-solid fa-print"></i> Print / Download</button>' +
+      '<button class="btn-primary" style="width:auto;background:' + (issues.length ? '#94a3b8' : 'var(--accent-green)') + ';" onclick="ftcSubmitClosing()"><i class="fa-solid fa-lock"></i> ' + (closedNow ? 'Complete verification close' : 'Submit and close month') + '</button>' +
+      '</div>' +
+      (issues.length ? '<div class="ftc-check bad" style="margin-top:12px;"><i class="fa-solid fa-triangle-exclamation"></i><div><b>Cannot be submitted yet</b><ul style="margin:6px 0 0 16px;padding:0;font-size:.78rem;">' + issues.map(function (i) { return '<li>' + esc(i) + '</li>'; }).join('') + '</ul></div></div>' : '') +
+      '</div>';
   }
 
   window.ftcPrintReport = function () {
-    var rec = closingRecord(wz.month);
-    if (!rec) return alert('No closing record exists for this month.');
+    var mk = wz.month;
+    var data = closingData(mk);
     var w = window.open('', '_blank');
     if (!w) return alert('Please allow pop-ups to print the closing report.');
-    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Closing Report ' + esc(monthLabel(wz.month)) + '</title>' +
-      '<style>body{font-family:Arial,Helvetica,sans-serif;padding:24px;color:#0b1e2d;}</style></head><body>' +
-      reportHTML(wz.month, rec) + '</body></html>');
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Closing Report - ' + monthLabel(mk) + '</title>' +
+      '<style>body{font-family:Arial,Helvetica,sans-serif;padding:28px;color:#0b1e2d;}h3{margin:0 0 4px;}table{width:100%;border-collapse:collapse;}</style></head><body>' +
+      letterheadHTML() + reportBodyHTML(mk, data) + '</body></html>');
     w.document.close();
-    w.focus();
-    setTimeout(function () { try { w.print(); } catch (e) { } }, 350);
+    setTimeout(function () { try { w.focus(); w.print(); } catch (e) { } }, 400);
   };
 
-  function stepBlocker(step) {
-    var mk = wz.month;
-    if (step === 2) {
-      var recv = openReceivables(mk);
-      if (recv.length) {
-        var total = 0;
-        recv.forEach(function (s) { total += receivableDue(s); });
-        return recv.length + ' receivable(s) totalling ' + money(total) + ' must be settled first.';
-      }
+  /* ------------------------------------------------------------ validation */
+  function validationIssues(mk) {
+    var out = [];
+    var due = openReceivables(mk);
+    if (due.length) {
+      var amt = 0;
+      due.forEach(function (s) { amt += receivableDue(s); });
+      out.push(due.length + ' receivable(s) totalling ' + money(amt) + ' must be settled.');
+    }
+    var st = salaryTotals(mk);
+    if (st.pending) out.push(st.pending + ' staff salary row(s) are not finalised.');
+    var avail = salaryAvailability(mk);
+    var d = draft(mk);
+    if (num(d.pay.cash) > avail.cash + 0.004) out.push('The salary allocation exceeds the Cash Drawer balance.');
+    if (num(d.pay.bank) > avail.bank + 0.004) out.push('The salary allocation exceeds the Bank/UPI balance.');
+    var bal = getOperatingBalances(mk);
+    if (bal.cash < -0.004 || bal.bank < -0.004) out.push('A cash or bank balance is negative.');
+    if (!((appData.cashBook || {})[mk])) out.push('The Cash Book monthly summary must be saved.');
+    if (num(d.transfer.cash) > 0.004 || num(d.transfer.bank) > 0.004) out.push('The transfer to the administrator must be confirmed.');
+    if (!d.opening || !d.opening.set) out.push('The opening balances for the next month must be confirmed.');
+    return out;
+  }
+
+  function stepLockNote(mk, step) {
+    if (step === 1) {
+      var due = openReceivables(mk);
+      if (due.length) return 'Settle every outstanding receivable to continue.';
+    }
+    if (step === 3) {
+      var st = salaryTotals(mk);
+      if (st.pending) return 'Finalise the salary of every staff member to continue.';
+    }
+    if (step === 4) {
+      if (!((appData.cashBook || {})[mk])) return 'Save the monthly cash book summary to continue.';
     }
     if (step === 5) {
-      var pend = salaryRows(mk).filter(function (r) { return r.total > 0 && !r.finalized; });
-      if (pend.length) return 'Finalise the salary of ' + pend.map(function (r) { return r.name; }).join(', ') + ' first.';
+      var d = draft(mk);
+      if (num(d.transfer.cash) > 0.004 || num(d.transfer.bank) > 0.004) return 'Confirm or clear the transfer amounts to continue.';
     }
-    if (step === 6 || step === 7) {
-      if (validationIssues(mk).length) return 'Resolve the failed checks before continuing.';
+    if (step === 6) {
+      var dd = draft(mk);
+      if (!dd.opening || !dd.opening.set) return 'Confirm the opening balances for the next month to continue.';
     }
     return '';
   }
 
+  /* ---------------------------------------------------------------- render */
   function renderWizard() {
-    var mk = wz.month;
-    document.getElementById('ftcWzTitle').innerText = 'Monthly Closing \u00B7 ' + monthLabel(mk);
-    document.getElementById('ftcWzSub').innerText = isClosedMonth(mk)
-      ? 'Closed ' + ((closingRecord(mk) || {}).closedDate || '')
-      : 'Stage ' + wz.step + ' of 8';
+    var box = document.getElementById('ftcWizard');
+    if (!box) return;
+    var mk = wz.month || pendingCloseMonth() || getISTMonthStr();
+    wz.month = mk;
+    var readOnly = isClosedMonth(mk) && !wz.reclose;
+    var d = draft(mk);
+    d.step = wz.step;
 
-    document.getElementById('ftcWzRail').innerHTML = STEP_TITLES.map(function (t, i) {
-      var n = i + 1;
-      var cls = n === wz.step ? 'current' : (n < wz.step ? 'done' : '');
-      return '<div class="ftc-wz-dot ' + cls + '">' + n + '. ' + esc(t) + '</div>';
+    var rail = STEP_TITLES.map(function (t, i) {
+      var n = i + 1, active = n === wz.step;
+      return '<button class="ftc-step' + (active ? ' active' : '') + '" onclick="ftcGotoStep(' + n + ')">' +
+        '<span class="ftc-step-no">' + n + '</span><span class="ftc-step-label">' + esc(t) + '</span></button>';
     }).join('');
 
-    var body;
-    if (wz.step === 1) body = stepOverview();
-    else if (wz.step === 2) body = stepReceivables();
-    else if (wz.step === 3) body = stepBook('cash');
-    else if (wz.step === 4) body = stepBook('bank');
-    else if (wz.step === 5) body = stepSalaries();
-    else if (wz.step === 6) body = stepValidation();
-    else if (wz.step === 7) body = stepLock();
-    else body = stepReport();
-    document.getElementById('ftcWzBody').innerHTML = body;
+    var body = '';
+    if (wz.step === 1) body = stepSummary();
+    else if (wz.step === 2) body = stepClosingBalances();
+    else if (wz.step === 3) body = stepExpenseFinalization();
+    else if (wz.step === 4) body = stageCashBook();
+    else if (wz.step === 5) body = stageTransfer();
+    else if (wz.step === 6) body = stageOpening();
+    else body = stageReport();
 
-    var foot = document.getElementById('ftcWzFoot');
-    if (isClosedMonth(mk) && wz.step === 8) {
-      foot.innerHTML = '<span class="ftc-wz-status" style="color:#059669;"><i class="fa-solid fa-lock"></i> ' + esc(monthLabel(mk)) + ' is closed and locked.</span>' +
-        '<button class="btn-secondary" style="width:auto;" onclick="ftcCloseWizard()">Close</button>';
-      return;
-    }
-    var blocker = stepBlocker(wz.step);
-    var nextLabel = wz.step === 7 ? 'Close ' + monthLabel(mk) : 'Continue';
-    foot.innerHTML =
-      (blocker ? '<span class="ftc-wz-status"><i class="fa-solid fa-circle-exclamation"></i> ' + esc(blocker) + '</span>' : '<span class="ftc-wz-status"></span>') +
-      '<button class="btn-secondary" style="width:auto;" onclick="ftcPrevStep()"' + (wz.step === 1 ? ' disabled' : '') + '><i class="fa-solid fa-arrow-left"></i> Back</button>' +
-      '<button class="btn-primary" style="width:auto;' + (wz.step === 7 ? 'background:var(--atmos-red);' : '') + '" onclick="ftcNextStep()">' +
-      esc(nextLabel) + ' <i class="fa-solid fa-arrow-right"></i></button>';
+    var lock = stepLockNote(mk, wz.step);
+    var rawMonth = closingRelaxed(mk) ? ' (late closing)' : '';
+    box.innerHTML = '<div class="ftc-wz-card" onclick="event.stopPropagation()">' +
+      '<div class="ftc-wz-head">' +
+      '<div><div class="ftc-wz-kicker">' + (readOnly ? 'Closing report' : 'Mandatory month-end closing') + rawMonth + '</div>' +
+      '<div class="ftc-wz-title">' + esc(monthLabel(mk)) + '</div></div>' +
+      '<button class="ftc-wz-x" onclick="ftcCloseWizard()" title="Close"><i class="fa-solid fa-xmark"></i></button>' +
+      '</div>' +
+      '<div class="ftc-wz-rail">' + rail + '</div>' +
+      '<div class="ftc-wz-body">' + body + '</div>' +
+      '<div class="ftc-wz-foot">' +
+      (lock ? '<div class="ftc-wz-lock"><i class="fa-solid fa-circle-exclamation"></i> ' + esc(lock) + '</div>' : '') +
+      '<div class="ftc-wz-foot-actions">' +
+      (wz.step > 1 ? '<button class="btn-secondary" style="width:auto;" onclick="ftcWizardBack()"><i class="fa-solid fa-arrow-left"></i> Back</button>' : '') +
+      (wz.step < STEP_COUNT
+        ? '<button class="btn-primary" style="width:auto;' + (lock ? 'opacity:.55;' : '') + '" onclick="ftcWizardNext()">Continue <i class="fa-solid fa-arrow-right"></i></button>'
+        : '<button class="btn-secondary" style="width:auto;" onclick="ftcCloseWizard()">Close</button>') +
+      '</div></div></div>';
+    box.style.display = 'flex';
   }
 
-  window.ftcNextStep = function () {
-    var blocker = stepBlocker(wz.step);
-    if (blocker) { alert(blocker); return; }
-    if (wz.step === 7) { finaliseClose(); return; }
-    if (wz.step < 8) { wz.step += 1; renderWizard(); }
+  window.ftcGotoStep = function (n) {
+    wz.step = Math.min(STEP_COUNT, Math.max(1, num(n)));
+    renderWizard();
+  };
+  window.ftcWizardBack = function () { if (wz.step > 1) { wz.step--; renderWizard(); } };
+  window.ftcWizardNext = function () {
+    var lock = stepLockNote(wz.month, wz.step);
+    if (lock) { ftcShowNote(lock, 'ftcWizard'); return; }
+    if (wz.step === 4 && !((appData.cashBook || {})[wz.month])) { ftcSaveCashBook(); }
+    if (wz.step < STEP_COUNT) { wz.step++; renderWizard(); }
   };
 
-  window.ftcPrevStep = function () { if (wz.step > 1) { wz.step -= 1; renderWizard(); } };
-
-  function finaliseClose() {
+  /* --------------------------------------------------------------- submit */
+  window.ftcSubmitClosing = function () {
     var mk = wz.month;
-    if (isClosedMonth(mk)) { alert('This month is already closed.'); return; }
     var issues = validationIssues(mk);
-    if (issues.length) { alert('The month cannot be closed:\n\n' + issues.join('\n')); return; }
-    if (!confirm('Close ' + monthLabel(mk) + ' now?\n\nEvery record of this month will be locked. Cash Drawer and Bank/UPI balances are transferred to the administrator and reset to zero; outstanding receivables stay on record.')) return;
+    if (issues.length) return alert('Complete the following before closing ' + monthLabel(mk) + ':\n\n\u2022 ' + issues.join('\n\u2022 '));
+    var alreadyClosed = isClosedMonth(mk);
+    var reclose = alreadyClosed && wz.reclose === true;
+    if (!reclose && alreadyClosed) return alert(monthLabel(mk) + ' is already closed.');
 
-    var backup = null;
-    try {
-      backup = JSON.stringify(appData);
-      var bal = getOperatingBalances(mk);
-      var t = {
-        interactions: entriesOf(mk).length,
-        charges: 0, net: 0, deptFees: 0, receivablesRaised: 0, receivablesSettled: 0,
-        receivablesOutstanding: bal.credit, cashClosing: bal.cash, bankClosing: bal.bank,
-        expenses: 0, salary: 0, transferred: bal.cash + bal.bank
-      };
-      entriesOf(mk).forEach(function (s) {
-        t.charges += num(s.serviceCharge);
-        t.net += num(s.serviceCharge) - num(s.discount);
-        t.deptFees += num(s.deptFee);
-        if (receivableDue(s) > 0) t.receivablesRaised += receivableDue(s);
-        (s.settlements || []).forEach(function (x) { t.receivablesSettled += num(x.total); });
-      });
-      (appData.expenseLog || []).forEach(function (e) {
-        if (String(e.date || '').substring(0, 7) !== mk) return;
-        t.expenses += num(e.amount);
-        if (e.category === 'Salary / Salary Advance') t.salary += num(e.amount);
-      });
+    var data = closingData(mk);
+    var msg = (reclose ? 'Complete the verification close of ' : 'Close ') + monthLabel(mk) + ' ?\n\n' +
+      'Service charge collected: ' + money(data.charges) + '\n' +
+      'Total expenses: ' + money(data.expensesTotal) + '\n' +
+      'Net balance: ' + money(data.net) + '\n' +
+      (reclose ? '\nOnly the closing report is refreshed. October records and the current month stay unchanged.' : '\nOpening balances of ' + monthLabel(data.nextMonth) + ' will be set to Cash ' + money(data.opening.cash) + ' and Bank ' + money(data.opening.bank) + '.');
+    if (!confirm(msg)) return;
 
-      /* The closed month keeps its own opening balances, so its history is
-         never rewritten. The cash and bank balances are transferred to the
-         administrator, so the FOLLOWING month opens at zero and only the
-         outstanding receivables carry forward. Entries of the new month, and
-         of every other month, are not touched. */
-      var nextMk = nextMonth(mk);
-      if (!appData.openingBalances[nextMk]) appData.openingBalances[nextMk] = { cash: 0, bank: 0, credit: 0 };
-      appData.openingBalances[nextMk].cash = 0;
-      appData.openingBalances[nextMk].bank = 0;
-      appData.openingBalances[nextMk].credit = bal.credit;
-
-      appData.closedMonths[mk] = {
-        closed: true, month: mk, monthLabel: monthLabel(mk),
-        closingType: 'Manual Month-End Closing',
-        closedAt: Date.now(), closedDate: getISTDateStr(), closedTime: getISTTimeStr(),
-        closedBy: currentUser ? currentUser.name : 'Admin',
-        closedRole: currentUser ? currentUser.role : 'Admin',
-        totals: t,
-        salaries: salaryRows(mk).map(function (r) {
-          return { name: r.name, basic: r.basic, incentive: r.incentive, attAdj: r.attAdj, total: r.total, finalizedAmount: r.finalized ? r.finalizedAmount : r.total };
-        }),
-        remarks: ''
-      };
-
-      if (saveData() === false) throw new Error('The closing could not be saved on this device.');
-
-      wz.step = 8;
-      renderWizard();
-      alert('Month ' + monthLabel(mk) + ' has been closed and locked successfully.');
-    } catch (err) {
-      if (backup) { try { appData = JSON.parse(backup); } catch (e) { } }
-      alert('The month could not be closed: ' + (err && err.message ? err.message : 'unexpected error') + '\n\nNo change was saved. The closing can be resumed from stage 1.');
-      wz.step = 1;
-      renderWizard();
+    if (!reclose) {
+      appData.openingBalances = appData.openingBalances || {};
+      appData.openingBalances[data.nextMonth] = { cash: r2(data.opening.cash), bank: r2(data.opening.bank), credit: 0 };
     }
-  }
 
-  window.ftcFinaliseClose = finaliseClose;
+    appData.closedMonths = appData.closedMonths || {};
+    appData.closedMonths[mk] = {
+      closed: true, month: mk, monthLabel: monthLabel(mk),
+      closedAt: Date.now(), closedDate: getISTDateStr(), closedTime: getISTTimeStr(),
+      closedBy: (currentUser && currentUser.name) || 'Administrator',
+      closedRole: (currentUser && currentUser.role) || 'Admin',
+      closingType: reclose ? 'Verification Re-Close' : 'Manual Month-End Closing',
+      reclose: !!reclose,
+      totals: {
+        interactions: data.interactions, charges: data.charges, discount: data.discount, dept: data.dept,
+        recv: data.recv, expenses: data.expensesTotal, shopExpenses: data.shopExpenses,
+        salary: data.salaryTotal, additional: data.additionalTotal, adminFunded: data.adminFunded,
+        net: data.net, cumulative: data.cumulative, cashAtClosing: data.cashAtClosing, bankAtClosing: data.bankAtClosing
+      },
+      salaries: data.salaries,
+      additionalExpenses: data.additionalExpenses,
+      cashBook: (appData.cashBook || {})[mk] || { net: data.net, cumulative: data.cumulative, expenses: data.expensesTotal, charges: data.charges, adminFunded: data.adminFunded },
+      transfer: data.transfer,
+      opening: data.opening,
+      nextMonth: data.nextMonth,
+      adminFund: data.adminFund,
+      receivables: data.receivables,
+      remarks: ''
+    };
+
+    if (reclose) {
+      appData.recloseUsed = appData.recloseUsed || {};
+      appData.recloseUsed[mk] = { at: Date.now(), by: (currentUser && currentUser.name) || 'Administrator' };
+    }
+
+    var d = draft(mk);
+    d.step = STEP_COUNT;
+    d.submitted = true;
+    saveData();
+
+    wz.reclose = false;
+    wz.keepFlag = true;
+    ftcCloseWizard();
+    wz.keepFlag = false;
+    appData.closingInProgress = null;
+    saveData();
+    alert(monthLabel(mk) + (reclose ? ' verified and closed again.' : ' closed successfully.') + '\n\nThe closing report is available in Month Closing.');
+    renderGate();
+    showGreeting(nextMonth(mk));
+  };
+
+  /* --------------------------------------------------- one-time re-close */
+  var RECLOSE_MONTH = '2026-10';
+  function recloseAvailable() {
+    if (!isClosedMonth(RECLOSE_MONTH)) return false;
+    return !((appData.recloseUsed || {})[RECLOSE_MONTH]);
+  }
+  function recloseNoteHTML() {
+    if (!recloseAvailable()) return '';
+    return '<div style="margin-top:10px;padding:10px 12px;border:1px dashed #f59e0b;border-radius:10px;background:#fffbeb;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
+      '<div style="font-size:.76rem;color:#92400e;font-weight:700;flex:1;min-width:180px;"><i class="fa-solid fa-rotate-right"></i> One-time allowance: ' + esc(monthLabel(RECLOSE_MONTH)) + ' can be closed again to verify the new flow. Entries and current balances stay untouched.</div>' +
+      '<button class="btn-secondary" style="width:auto;padding:6px 10px;font-size:.74rem;border-color:#f59e0b;color:#92400e;" onclick="ftcStartReclose()">Re-close ' + esc(monthLabel(RECLOSE_MONTH)) + '</button></div>';
+  }
+  window.ftcStartReclose = function () {
+    if (!isAdminUser()) return alert('Only the Business Admin can close a month.');
+    if (!recloseAvailable()) return alert('The one-time re-closing allowance has already been used.');
+    wz.reclose = true;
+    openWizard(RECLOSE_MONTH);
+  };
+
+  function showGreeting(mk) {
+    var el = document.getElementById('ftcGreeting');
+    if (!el) return;
+    var nm = document.getElementById('ftcGreetingName');
+    var mm = document.getElementById('ftcGreetingMonth');
+    if (nm) nm.innerText = (currentUser && currentUser.name) || 'Team';
+    if (mm) mm.innerText = monthLabel(mk || getISTMonthStr());
+    el.style.display = 'flex';
+  }
 
   /* ==================================================================
      PART 7 / 9 — list scrolling and centred summary tiles
