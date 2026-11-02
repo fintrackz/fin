@@ -34,6 +34,7 @@
       --accent-rose-bg: #fff1f2;
       --accent-amber: #d97706;
       --accent-amber-bg: #fffbeb;
+      --accent-orange: #ea580c;
       --accent-purple: #7c3aed;
       --accent-purple-bg: #f5f3ff;
       --bg: #F6F3ED;
@@ -516,7 +517,6 @@ body{padding-bottom:104px !important}
 .metric-card.card-rose .metric-title,.metric-card.card-rose .metric-value{color:var(--accent-rose)}
 .metric-card.card-amber .metric-title,.metric-card.card-amber .metric-value{color:var(--accent-amber)}
 .metric-card.card-mint .metric-title,.metric-card.card-mint .metric-value{color:#16A34A}
-table.ft-only5 tr:nth-child(n+6){display:none !important}
 
 /* Login + PIN screens: same layout/terminology as the reference, app's own colours */
 #loginModal.login-modal{background:#F6F3ED;padding:18px}
@@ -6657,9 +6657,9 @@ const FIREBASE_CONFIG = {
       tr.innerHTML = `
         <td>${s.date}<br><span style="font-size:0.75rem; color:var(--text-muted);">${s.time || ''}</span></td>
         <td><strong>${s.desc}</strong>${s.notes ? `<br><span style="font-size:0.72rem; color:var(--text-muted);">${s.notes}</span>` : ''}${s.receivablePersonName ? `<br><span style="font-size:0.72rem; color:var(--accent-purple); font-weight:700;"><i class="fa-solid fa-user"></i> ${s.receivablePersonName}</span>` : ''}</td>
-        <td>₹${parseFloat(s.deptFee || 0).toFixed(2)}</td>
-        <td>₹${parseFloat(s.serviceCharge || 0).toFixed(2)}</td>
-        <td>₹${parseFloat(s.discount || 0).toFixed(2)}</td>
+        <td style="color:var(--accent-amber); font-weight:800;">₹${parseFloat(s.deptFee || 0).toFixed(2)}</td>
+        <td style="color:var(--primary); font-weight:800;">₹${parseFloat(s.serviceCharge || 0).toFixed(2)}</td>
+        <td style="color:var(--accent-orange); font-weight:800;">₹${parseFloat(s.discount || 0).toFixed(2)}</td>
         <td style="font-weight:800; color:var(--accent-green);">₹${parseFloat(s.total || 0).toFixed(2)}</td>
         <td>${modeBadge}${!inSelectedMonth ? '<br><span style="font-size:0.68rem; color:var(--accent-purple); font-weight:700;">Outstanding — carried forward from an earlier month</span>' : ''}</td>
         <td>${s.staff || s.user || '\u2014'}</td>
@@ -14266,28 +14266,23 @@ if (typeof __ftSwitchTab === 'function') {
 (function () {
   var IDS = ['reportItemizedTable','serviceHistoryTable','expenseHistoryTable','transferHistoryTable',
     'adminTransferHistoryTable','histServiceLogTable','attAuditLogBody','historicalMonthsTableBody',
-    'staffSalaryTableBody','masterServicesTable','staffMasterServicesTable','overallStaffReportTableBody'];
-  var SCROLL_IDS = ['attendanceTable', 'profDetailedAttendanceTableBody'];
+    'staffSalaryTableBody','masterServicesTable','staffMasterServicesTable','overallStaffReportTableBody',
+    'attendanceTable','profDetailedAttendanceTableBody','attendanceMgmtTableBody','invoiceItemsTableBody',
+    'staffReceivablesTableBody','paBusinessTableBody','paPendingPaymentsTable','paPaymentHistoryTable',
+    'paNotifHistoryTable','paReportTable','paCleanupLogTable'];
+  function scrollBox(id, height) {
+    var tb = document.getElementById(id);
+    if (!tb || !tb.closest) return;
+    var table = tb.closest('table');
+    if (!table) return;
+    var box = table.parentElement;
+    if (!box) return;
+    box.style.maxHeight = height;
+    box.style.overflowY = 'auto';
+  }
   function cap() {
-    SCROLL_IDS.forEach(function (id) {
-      var tb = document.getElementById(id);
-      if (!tb || !tb.closest) return;
-      var table = tb.closest('table');
-      if (!table) return;
-      var box = table.parentElement;
-      if (!box) return;
-      box.style.maxHeight = '225px';
-      box.style.overflowY = 'auto';
-    });
-    IDS.forEach(function (id) {
-      var tb = document.getElementById(id);
-      if (!tb || !tb.closest) return;
-      var table = tb.closest('table');
-      if (!table) return;
-      if (!table.classList.contains('ft-only5')) table.classList.add('ft-only5');
-      var box = table.parentElement;
-      if (box && (box.style.maxHeight || box.style.overflowY)) { box.style.maxHeight = ''; box.style.overflowY = ''; }
-    });
+    /* Every list keeps all of its records and scrolls inside its own box. */
+    IDS.forEach(function (id) { scrollBox(id, '360px'); });
   }
   var t = null;
   function plan() { clearTimeout(t); t = setTimeout(cap, 80); }
@@ -16117,37 +16112,41 @@ async function ftPersistPlatformData() {
 
 /* ---------- late-closing allowance reminder -------------------------------- */
 #ftcGate.relax {
-  inset: auto 0 0 0;
-  padding: 0 14px 14px;
-  background: transparent;
-  overflow: visible;
-  align-items: flex-end;
-  pointer-events: none;
+  inset: 0;
+  padding: 24px 16px;
+  background: rgba(11, 30, 45, .55);
+  overflow: auto;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
 }
 #ftcGate.relax .ftc-relax-bar {
-  pointer-events: auto;
+  position: relative;
   width: 100%;
-  max-width: 980px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  background: #0b1e2d;
-  color: #fff;
-  border-radius: 14px;
-  padding: 12px 16px;
-  box-shadow: 0 18px 40px rgba(11, 30, 45, .28);
-  border-left: 6px solid #f59e0b;
+  max-width: 560px;
+  margin: auto;
+  background: #fff;
+  color: var(--text-main);
+  border-radius: 18px;
+  padding: 28px 24px 24px;
+  text-align: center;
+  box-shadow: 0 26px 60px rgba(11, 30, 45, .28);
+  border-top: 6px solid var(--accent-amber, #d97706);
 }
-#ftcGate.relax .ftc-relax-text { display: flex; flex-direction: column; gap: 3px; flex: 1 1 320px; }
-#ftcGate.relax .ftc-relax-text strong { font-size: .88rem; font-weight: 800; }
-#ftcGate.relax .ftc-relax-text span { font-size: .78rem; color: #cbd5e1; line-height: 1.55; }
+#ftcGate.relax .ftc-relax-text strong { display: block; font-size: 1.12rem; font-weight: 900; color: var(--atmos-navy, #0b1e2d); margin: 0 0 10px; }
+#ftcGate.relax .ftc-relax-month {
+  display: inline-block; margin: 0 0 12px; padding: 5px 14px; border-radius: 999px;
+  background: #fffbeb; color: #b45309; font-weight: 800; font-size: .86rem;
+}
+#ftcGate.relax .ftc-relax-text span { display: block; font-size: .86rem; color: #475569; line-height: 1.65; }
+#ftcGate.relax .ftc-relax-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 18px; }
+#ftcGate.relax .ftc-relax-actions button { width: auto; }
 #ftcGate.relax .ftc-relax-x {
+  position: absolute; top: 10px; right: 10px;
   background: transparent; border: 0; color: #94a3b8; cursor: pointer;
-  font-size: 1rem; padding: 4px 8px; border-radius: 8px;
+  font-size: 1rem; padding: 6px 9px; border-radius: 8px;
 }
-#ftcGate.relax .ftc-relax-x:hover { color: #fff; background: rgba(255, 255, 255, .12); }
+#ftcGate.relax .ftc-relax-x:hover { color: var(--atmos-navy); background: #f1f5f9; }
 
 /* ---------- PART 2/5/6 : closing wizard ----------------------------------- */
 #ftcWizard {
@@ -16794,15 +16793,18 @@ async function ftPersistPlatformData() {
   function relaxBannerHTML(mk) {
     var admin = isAdminUser();
     return '<div class="ftc-relax-bar">' +
+      '<button class="ftc-relax-x" onclick="ftcHideRelax()" title="Close"><i class="fa-solid fa-xmark"></i></button>' +
       '<div class="ftc-relax-text">' +
-      '<strong><i class="fa-solid fa-circle-info"></i> ' + esc(monthLabel(mk)) + ' is waiting to be closed</strong>' +
+      '<strong><i class="fa-solid fa-circle-info" style="color:var(--accent-amber);"></i> Month Closing Pending</strong>' +
+      '<div class="ftc-relax-month">' + esc(monthLabel(mk)) + '</div>' +
       '<span>' + (admin
         ? 'There is no deadline for this one - it waits until you close it. Only ' + esc(monthLabel(mk)) + ' records are locked; the new month and today\'s work stay exactly as they are.'
         : 'You can keep entering today\'s work normally. The administrator will close ' + esc(monthLabel(mk)) + '.') +
       '</span></div>' +
-      (admin ? '<button class="btn-primary" style="width:auto;background:var(--atmos-red);" onclick="ftcStartClosing()"><i class="fa-solid fa-play"></i> Close ' + esc(monthLabel(mk)) + ' now</button>' : '') +
-      '<button class="ftc-relax-x" onclick="ftcHideRelax()" title="Hide"><i class="fa-solid fa-xmark"></i></button>' +
-      '</div>';
+      '<div class="ftc-relax-actions">' +
+      (admin ? '<button class="btn-primary" style="background:var(--atmos-red);" onclick="ftcStartClosing()"><i class="fa-solid fa-play"></i> Close ' + esc(monthLabel(mk)) + ' now</button>' : '') +
+      '<button class="btn-secondary" onclick="ftcHideRelax()">' + (admin ? 'Later' : 'OK, got it') + '</button>' +
+      '</div></div>';
   }
 
   window.ftcHideRelax = function () {
