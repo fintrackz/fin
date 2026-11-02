@@ -9790,20 +9790,19 @@ function updatePlatformAdminLoginUI() {
 
 /* OPEN/CLOSE MODALS */
 function openPlatformAdminLogin() {
-  return waitForPlatformData(2500).catch(function () { return false; }).then(function () {
-    hideWelcomeScreen();
-    document.getElementById('loginModal').style.display = 'none';
-    if (platformFirstLoadDone && !ftReadyError && !platformHasAdmin()) { document.getElementById('paSetupModal').style.display = 'flex'; return; }
-    document.getElementById('paLoginModal').style.display = 'flex';
-  });
+  hideWelcomeScreen();
+  document.getElementById('loginModal').style.display = 'none';
+  var needsSetup = platformFirstLoadDone && !ftReadyError && !platformHasAdmin();
+  document.getElementById(needsSetup ? 'paSetupModal' : 'paLoginModal').style.display = 'flex';
+  return Promise.resolve();
 }
-function closePaLoginModal() { document.getElementById('paLoginModal').style.display = 'none'; }
+function closePaLoginModal() { document.getElementById('paLoginModal').style.display = 'none'; hideWelcomeScreen(); document.getElementById('loginModal').style.display = 'flex'; }
 function openPaSetupModal() {
-  return openPlatformAdminLogin();
+  return waitForPlatformData(2500).catch(function () { return false; }).then(openPlatformAdminLogin);
 }
 function closePaSetupModal() { document.getElementById('paSetupModal').style.display = 'none'; }
 function openPaForgotModal() {
-  closePaLoginModal();
+  document.getElementById('paLoginModal').style.display = 'none';
   var em = document.getElementById('paResetEmailInput'); if (em) em.value = '';
   var st = document.getElementById('paResetStatus'); if (st) st.style.display = 'none';
   document.getElementById('paForgotModal').style.display = 'flex';
@@ -13493,7 +13492,7 @@ function toggleIntroOffer() {
   function ensureGuestPortal() {
   if (currentUser || platformAdminUser) { document.body.classList.remove('guest-mode'); ftbHideBootSplash(); return; }
   document.body.classList.add('guest-mode');
-  showWelcomeScreen();
+  if (!['loginModal','paLoginModal','paSetupModal','paForgotModal','forgotPasswordModal','adminResetLinkModal','bizRegisterModal'].some(function (id) { var el = document.getElementById(id); return el && el.style.display === 'flex'; })) showWelcomeScreen();
   ftbHideBootSplash();
 }
 
