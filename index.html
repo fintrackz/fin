@@ -9684,7 +9684,7 @@ function ftbBootBranding() {
     if (branding && branding.logoDataUrl && image) image.src = branding.logoDataUrl;
   } catch (e) {}
 }
-setTimeout(ftbHideBootSplash, 4000);
+setTimeout(ftbHideBootSplash, 1000); setTimeout(function () { var bs = document.getElementById('ftbBootSplash'); if (bs && bs.parentNode) bs.parentNode.removeChild(bs); }, 1500);
 
 
 function listenScopedPlatformData() {
@@ -9749,18 +9749,18 @@ function ensureOwnRegistryRecord() {
 }
 
 function listenOwnBusinessRecord() {
-  if (!authBusinessId) return;
+  if (!authBusinessId || platformAdminUser) return;
   try {
     var ref = firebase.database().ref('atmos_platform_admin/businesses/' + authBusinessId);
     ref.on('value', function (snap) {
       var v = snap.val();
-      if (!v) { appLogout(); return; }
+      if (!v) return;
       if (!platformData.businesses) platformData.businesses = {};
       platformData.businesses[authBusinessId] = v;
       try { renderBizSubscriptionCard(); checkSubscriptionLock(); } catch (e) {}
       if (window.ftSubscriptionReady) window.ftSubscriptionReady();
       try { adoptRegisteredBusinessName(v); } catch (e) {}
-    }, function (error) { if (/permission.denied/i.test(String(error && error.code))) { appLogout(); return; } if (window.ftSubscriptionCheckFailed) window.ftSubscriptionCheckFailed(); });
+    }, function () { if (window.ftSubscriptionCheckFailed) window.ftSubscriptionCheckFailed(); });
     scopedPlatformRefs.push(ref);
   } catch (e) {}
 }
@@ -9854,12 +9854,12 @@ function updatePlatformAdminLoginUI() {
 
 /* OPEN/CLOSE MODALS */
 function openPlatformAdminLogin() {
-  return waitForPlatformData().then(function () {
+  return waitForPlatformData(2500).catch(function () { return false; }).then(function () {
     hideWelcomeScreen();
     document.getElementById('loginModal').style.display = 'none';
-    if (!platformHasAdmin()) { document.getElementById('paSetupModal').style.display = 'flex'; return; }
+    if (platformFirstLoadDone && !ftReadyError && !platformHasAdmin()) { document.getElementById('paSetupModal').style.display = 'flex'; return; }
     document.getElementById('paLoginModal').style.display = 'flex';
-  }).catch(function (error) { alert(ftAccountError(error)); });
+  });
 }
 function closePaLoginModal() { document.getElementById('paLoginModal').style.display = 'none'; }
 function openPaSetupModal() {
@@ -9997,9 +9997,9 @@ async function performPlatformAdminLogin() {
 
 /* Firebase-backed platform admin sign-in (email-link reset friendly). */
 async function firebasePlatformAdminSignIn(password) {
-  await waitForPlatformData();
-  var email = ftEmail(document.getElementById('paLoginName').value);
-  if (!email || email !== platformAdminEmail()) throw new Error('This email is not the platform administrator. Business administrators must use Admin Login.');
+  try { await waitForPlatformData(2500); } catch (e) {}
+  var email = ftEmail(document.getElementById('paLoginName').value), expectedEmail = platformAdminEmail();
+  if (!email || (expectedEmail && email !== expectedEmail)) throw new Error('This email is not the platform administrator. Business administrators must use Admin Login.');
   var credential = await firebaseAuth().signInWithEmailAndPassword(email, password);
   if (ftBootstrap && credential.user.uid !== ftBootstrap.uid) {
     await firebaseAuth().signOut();
@@ -11760,7 +11760,7 @@ function ftbShowWelcomeSplash() {
     '<div style="margin:20px auto 0;width:120px;height:3px;background:#e2e8f0;border-radius:2px;overflow:hidden;"><div style="height:100%;width:40%;background:#2563eb;border-radius:2px;animation:ftbSplashLoad 1.1s linear infinite;"></div></div>' +
     '</div>';
   document.body.appendChild(splash);
-  setTimeout(function () { splash.style.opacity = '0'; setTimeout(function () { if (splash.parentNode) splash.remove(); }, 400); }, 1100);
+  setTimeout(function () { splash.style.opacity = '0'; setTimeout(function () { if (splash.parentNode) splash.remove(); }, 400); }, 1000);
 }
 window.ftbShowWelcomeSplash = ftbShowWelcomeSplash;
 function markWelcomeSeen() {
@@ -15054,7 +15054,7 @@ if (typeof __ftSwitchTab === 'function') {
     /* And withdrawn the moment one appears, so the logo is never seen twice. */
     watchTimer = setInterval(function () { var g = F.el('ftSubscriptionBootGate'); if (g && F.splashOnScreen()) g.remove(); }, 200);
     /* A slow or refused cloud read must never keep anyone out of the app. */
-    releaseTimer = setTimeout(function () { if (document.body.classList.contains('ft-sub-checking')) window.ftSubscriptionRelease(); }, 4000);
+    releaseTimer = setTimeout(function () { if (document.body.classList.contains('ft-sub-checking')) window.ftSubscriptionRelease(); }, 1000);
   };
   window.ftSubscriptionCheckFailed = function () { window.ftSubscriptionRelease(); };
   window.ftSubscriptionReady = function () { readyBiz = F.bid(); clearTimeout(checkTimer); clearTimeout(releaseTimer); clearInterval(watchTimer); ftRenderAccessLock(); var g = F.el('ftSubscriptionBootGate'); if (g) g.remove(); document.body.classList.remove('ft-sub-checking'); };
@@ -15386,7 +15386,7 @@ if (typeof __ftSwitchTab === 'function') {
     done = true;
     try { signOutSplash(); } catch (e) {}
     /* The splash is given a moment to paint before the page returns to the welcome screen. */
-    setTimeout(function () { try { stockLogout.apply(self, args); } catch (e) { try { window.location.reload(); } catch (e2) {} } }, 700);
+    setTimeout(function () { try { stockLogout.apply(self, args); } catch (e) { try { window.location.reload(); } catch (e2) {} } }, 1000);
   };
 })();
 
