@@ -981,6 +981,7 @@ html, body { background-color: transparent !important; background-image: none !i
 <div id="paLoginCredView">
 <div class="pa-modal-field"><label>Administrator Email</label><input type="email" id="paLoginName" placeholder="Enter email address" required></div>
 <div class="pa-modal-field"><label>Password</label><div class="pw-field"><input type="password" id="paLoginPassword" placeholder="Enter password" required><i class="fa-solid fa-eye pw-eye" id="paLoginPasswordEye" onclick="togglePasswordVisibility('paLoginPassword','paLoginPasswordEye')"></i></div></div>
+<p id="paLoginError" role="alert" style="display:none;color:var(--atmos-red);font-size:.8rem;line-height:1.5;margin-bottom:12px"></p>
 <button class="btn-admin" onclick="performPlatformAdminLogin()"><i class="fa-solid fa-right-to-bracket"></i> Sign In to Platform Portal</button>
 <div id="paForgotLink" style="margin-top:10px;text-align:center;display:none">
 <a style="font-size:.75rem;color:var(--atmos-red);font-weight:700;cursor:pointer" onclick="openPaForgotModal()">Forgot Password?</a>
@@ -3798,33 +3799,12 @@ const FIREBASE_CONFIG = {
 
   function signinIndexRef(handle) { return firebase.database().ref(SIGNIN_INDEX_ROOT + '/' + signinHandleKey(handle)); }
 
-  /* Every handle a person may be typed as (email, mobile number, staff id). */
-  function accountHandles(user) {
-    var out = [];
-    function push(v) {
-      v = String(v === null || v === undefined ? '' : v).trim();
-      if (v && out.indexOf(v) < 0) out.push(v);
-    }
-    if (user.email) push(String(user.email).toLowerCase());
-    if (user.mobile) push(String(user.mobile).replace(/[^0-9]/g, ''));
-    if (user.mobile) push(String(user.mobile).trim());
-    if (user.id) push(String(user.id));
-    if (user.name) push(String(user.name));
-    return out;
-  }
-
   /* Publish this business's non-secret routing entries. Each entry carries a
      business id, an account id and a generation only - never a password, a PIN,
      a display name or a contact number. */
   function publishSigninIndex() {
-    if (!authBusinessId || !appData || !currentUser || currentUser.role !== 'Admin') return Promise.resolve();
-    var tasks = [];
-    appData.users.forEach(function (user) {
-      var entry = { b: authBusinessId, a: accountKey(user), g: user.authVersion || 1 };
-      if (user.email) tasks.push(ftPublishHandle(ftEmail(user.email), entry, true));
-      if (user.mobile) tasks.push(ftPublishHandle(String(user.mobile).replace(/[^0-9]/g, ''), entry, true));
-    });
-    return Promise.all(tasks);
+    window.ftStaffIndexPublish = publishSigninIndex;
+    return window.ftPublishSigninIndex ? window.ftPublishSigninIndex(authBusinessId, appData, currentUser, accountKey, ftPublishHandle, ftEmail) : Promise.resolve();
   }
 
   /* Write the claim that ties this verified identity to one business. The
@@ -4009,7 +3989,7 @@ const FIREBASE_CONFIG = {
           relinkCurrentUser();
           bindTenantMetaListener();
           if (currentUser && currentUser.role === 'Admin') {
-            syncMembershipSlots(currentUser).catch(function (e) { console.error('Membership sync failed:', e); });
+            syncMembershipSlots(currentUser).then(function () { if (window.ftAfterStaffSaved) return window.ftAfterStaffSaved(); }).catch(function (e) { console.error('Membership sync failed:', e); });
             migrateAllAccounts();
           }
           dedupeEntryIds();
@@ -4298,7 +4278,7 @@ const FIREBASE_CONFIG = {
     try { ftPublishBusinessFacts(); } catch (e) {}
     if (isFirebaseSyncActive && firebaseDbRef) {
       firebaseDbRef.set(convertToLegacyFormat()).catch(err => console.error("Firebase sync write error:", err));
-      if (currentUser && currentUser.role === 'Admin') syncMembershipSlots(currentUser);
+      if (currentUser && currentUser.role === 'Admin') syncMembershipSlots(currentUser).then(function () { if (window.ftAfterStaffSaved) return window.ftAfterStaffSaved(); }).catch(function (e) { console.error('Membership sync failed:', e); });
     }
   }
 
@@ -4314,11 +4294,13 @@ const FIREBASE_CONFIG = {
       /* Each browser tab holds its own sign-in session, so signing in or out in one tab never signs out, unpairs or greys the cloud sync of any other tab. */ try { var ftTabP = (firebase.auth.Auth && firebase.auth.Auth.Persistence) ? firebase.auth.Auth.Persistence.SESSION : 'session'; var ftTabPset = firebaseAuth().setPersistence(ftTabP); if (ftTabPset && ftTabPset.catch) ftTabPset.catch(function () {}); } catch (e) {}
       ftFirebaseStarted = true;
       firebaseAuth().onAuthStateChanged(function (identity) {
+        var live = firebaseAuth().currentUser;
+        if ((identity ? identity.uid : null) !== (live ? live.uid : null)) return;
         if (!identity) {
           detachTenant(); currentUser = null;
           appData = buildEmptyBusinessData(); appData.users = [];
           setSyncBadge('signin');
-        } else if (authBusinessId) startBusinessSync();
+        } else if (authBusinessId && currentUser && currentUser.authUid === identity.uid) startBusinessSync();
         else setSyncBadge('signin');
       });
       setSyncBadge('signin');
@@ -5204,13 +5186,13 @@ const FIREBASE_CONFIG = {
   }
 
   function completeLogin(user) {
+    try { (window.ftbMonthlyWelcomeSplash || ftbShowWelcomeSplash)(user); } catch (e) { ftbShowWelcomeSplash(); }
     document.body.classList.remove('guest-mode');
     hideWelcomeScreen();
     saveRememberedLogin();
     currentUser = user;
     document.getElementById('activeUserBadge').innerText = user.name + ' (' + user.role + ')';
     document.getElementById('loginModal').style.display = 'none';
-    ftbShowWelcomeSplash();
     try { if (window.ftPaintCachedBell) window.ftPaintCachedBell(); } catch (e) {}
 
     // Show Admin Tab if Admin
@@ -5314,6 +5296,8 @@ const FIREBASE_CONFIG = {
       showLoginError('This account is not linked to a registered business yet. Please contact your platform administrator to complete the business association.');
     } else if (code === 'NO_LOCAL_CREDENTIAL') {
       showLoginError('We could not verify this account. Please use "Forgot Password?" or ask platform support to reset it for you.');
+    } else if (code === 'LOGIN_TIMEOUT') {
+      showLoginError(err.message);
     } else {
       showLoginError('Sign-in could not be completed. Please try again.');
     }
@@ -5323,10 +5307,9 @@ const FIREBASE_CONFIG = {
   /* Finish sign-in for an account that was already found in the local list. */
   function completeFirebaseLogin(user, pass, submitBtn) {
     function restoreBtn() { if (submitBtn) { submitBtn.disabled = false; if (submitBtn.dataset.label) submitBtn.innerHTML = submitBtn.dataset.label; } }
-    return firebaseSignIn(user, pass).then(function (uid) {
-      /* Bind the business from the identity Firebase just verified - never from
-         this device's stored value. */
-      return adoptOrVerifyTenant(uid, user).then(function () {
+    return ftLoginRequest(firebaseSignIn(user, pass)).then(function (uid) {
+      ftSyncPlatformIdentity(firebaseAuth().currentUser);
+      return ftLoginRequest(adoptOrVerifyTenant(uid, user)).then(function () {
         restoreBtn();
         document.getElementById('loginPassword').value = '';
         user.authUid = uid;
@@ -5359,7 +5342,7 @@ const FIREBASE_CONFIG = {
   /* Fresh-browser administrator sign-in: the administrator's secure identity
      lives under their own email address, so verify it directly with Firebase
      Authentication, then wait for this business's data to load. */
-  async   function findRegistryBusinessByAdminEmail(email) {
+  function findRegistryBusinessByAdminEmail(email) {
     var reg = (platformData && platformData.businesses) || {};
     var want = ftEmail(email);
     var hit = null;
@@ -5406,8 +5389,8 @@ const FIREBASE_CONFIG = {
       appData = buildEmptyBusinessData(); appData.users = [];
       var credential = null, owned = null, managed = false, managedGen = 1, firstError = null;
       try {
-        credential = await firebaseAuth().signInWithEmailAndPassword(typedEmail, password);
-        owned = await ftOwnedBusiness(credential.user);
+        credential = await ftLoginRequest(firebaseAuth().signInWithEmailAndPassword(typedEmail, password)); ftSyncPlatformIdentity(credential.user);
+        owned = await ftLoginRequest(ftOwnedBusiness(credential.user));
       } catch (err) {
         var code = (err && err.code) ? err.code : '';
         if (code === 'auth/too-many-requests' || code === 'auth/network-request-failed' || code === 'auth/operation-not-allowed' || code === 'auth/api-key-not-valid' || code === 'auth/invalid-api-key') throw err;
@@ -5416,9 +5399,9 @@ const FIREBASE_CONFIG = {
         owned = null;
       }
       if (!credential) {
-        var managedRun = await signInManagedAdmin(typedEmail, password);
+        var managedRun = await ftLoginRequest(signInManagedAdmin(typedEmail, password));
         if (!managedRun) throw firstError || { code: 'auth/user-not-found' };
-        credential = managedRun.credential;
+        credential = managedRun.credential; ftSyncPlatformIdentity(credential.user);
         owned = { id: managedRun.businessId, record: managedRun.record };
         managed = true;
         managedGen = managedRun.gen;
@@ -5429,8 +5412,8 @@ const FIREBASE_CONFIG = {
       bindActiveBusiness(owned.id);
       platformData.businesses = {};
       platformData.businesses[owned.id] = owned.record;
-      await writeTenantClaim(credential.user.uid, owned.id, 'ADM-001', 'Admin');
-      var snapshot = await businessDataRef().once('value');
+      await ftLoginRequest(writeTenantClaim(credential.user.uid, owned.id, 'ADM-001', 'Admin'));
+      var snapshot = await ftLoginRequest(businessDataRef().once('value'));
       if (!snapshot.exists()) throw new Error('Your business registration is incomplete. Finish Register Your Business using this same email and password.');
       appData = convertLegacyData(snapshot.val());
       var admin = appData.users.find(function (user) { return user.role === 'Admin' && ftEmail(user.email) === typedEmail; });
@@ -5462,6 +5445,7 @@ const FIREBASE_CONFIG = {
     clearLoginError();
     const pass = document.getElementById('loginPassword').value;
     var submitBtn = document.querySelector('#loginModal button[onclick="performLogin()"]');
+    if (submitBtn && submitBtn.disabled) return;
     function setBtnBusy() { if (submitBtn) { submitBtn.disabled = true; submitBtn.dataset.label = submitBtn.innerHTML; submitBtn.innerHTML = 'Signing in...'; } }
     let user = null;
     if (currentLoginMode === 'Admin') {
@@ -8449,7 +8433,7 @@ const FIREBASE_CONFIG = {
       applyPasswordChange(newStaff, pass).then(function () { saveData(); }).catch(function () { saveData(); });
     }
 
-    saveData();
+    saveData(); try { if (window.ftAfterStaffSaved) window.ftAfterStaffSaved(); } catch (e) {}
     closeAddStaffModal();
     renderLoginDropdown();
     renderStaffPasswordTable();
@@ -9572,43 +9556,7 @@ function ftAcceptPublic(value) {
   ftPublicLoaded = true;
   ftPublicChanged();
 }
-function ftAttachPlatform(uid) {
-  var epoch = ftPlatformEpoch;
-  var ref = firebase.database().ref('atmos_platform_admin');
-  return ref.once('value').then(function (snap) {
-    if (!firebaseAuth().currentUser || firebaseAuth().currentUser.uid !== uid || epoch !== ftPlatformEpoch) throw new Error('Session changed. Please sign in again.');
-    var value = snap.val();
-    if (!value || !value.credentials || value.credentials.uid !== uid) throw new Error('This identity is not the platform administrator. Use the business administrator login instead.');
-    ftObservedAuthUid = uid;
-    platformData = Object.assign({}, platformData, value);
-    ftKeepSavedBranding();
-    platformDbRef = ref;
-    platformSyncActive = true;
-    if (ftPlatformListenerUid !== uid) {
-      ref.off();
-      ftPlatformListenerUid = uid;
-      ref.on('value', function (next) {
-        if (epoch !== ftPlatformEpoch || !firebaseAuth().currentUser || firebaseAuth().currentUser.uid !== uid) return;
-        var data = next.val();
-        if (!data || !data.credentials || data.credentials.uid !== uid) return;
-        platformData = Object.assign({}, platformData, data);
-        ftKeepSavedBranding();
-        platformSyncActive = true;
-        updatePlatformAdminLoginUI();
-        if (platformAdminUser) renderPlatformAdminViews();
-      }, function (error) { platformSyncActive = false; console.error('Platform access refused:', error); });
-    }
-    updatePlatformAdminLoginUI();
-    return value.credentials;
-  });
-}
-function ftStopPlatform() {
-  ftPlatformEpoch++;
-  if (platformDbRef) platformDbRef.off();
-  platformDbRef = null;
-  ftPlatformListenerUid = null;
-  platformSyncActive = false;
-}
+/* Platform session startup is defined in fintrack-login.js. */
 function ftPublicSnapshot() {
   return Promise.all([
     firebase.database().ref('atmos_platform_admin/public').once('value'),
@@ -9822,19 +9770,7 @@ function setupPlatformFirebaseSync() {
   firebase.database().ref('atmos_platform_bootstrap').on('value', function (snap) {
     ftBootstrap = snap.val(); ftBootstrapLoaded = true; ftPublicChanged();
   }, function (error) { ftReadyError = error; console.error('Platform setup status:', error); });
-  firebaseAuth().onAuthStateChanged(function (identity) {
-    var nextUid = identity ? identity.uid : null;
-    if (nextUid === ftObservedAuthUid) return;
-    ftObservedAuthUid = nextUid;
-    ftStopPlatform();
-    if (!identity || !ftBootstrap || ftBootstrap.uid !== identity.uid) {
-      platformAdminUser = null;
-      platformData.credentials = null;
-      platformData.businesses = {};
-      platformData.payments = {};
-      platformData.notifications = {};
-    }
-  });
+  firebaseAuth().onAuthStateChanged(ftSyncPlatformIdentity);
 }
 
 /* UPDATE PLATFORM ADMIN LOGIN UI */
@@ -9952,69 +9888,7 @@ function openPlatformAdminFirebaseSession(credential, password) {
   return firebasePlatformAdminSignIn(password);
 }
 
-function enterPlatformAdminMode() {
-  var verified = firebaseAuth().currentUser;
-  if (!verified || !platformSyncActive || !platformData.credentials || platformData.credentials.uid !== verified.uid || (ftBootstrap && ftBootstrap.uid !== verified.uid)) throw new Error('Verified platform administrator sign-in is required.');
-  /* The Main Platform Administrator keeps the Administration & Controls view,
-     where the platform-only panels live. */
-  setTimeout(function () {
-    var b = document.getElementById('btn-adminTab'); if (b) b.style.display = 'inline-block';
-    var d = document.getElementById('drawer-adminTab'); if (d) d.style.display = 'flex';
-    try { paPrepareTenantAssociations(); } catch (e) {}
-  }, 0);
-
-  platformAdminUser = platformData.credentials;
-  document.body.classList.remove('guest-mode');
-  document.body.classList.add('pa-mode');
-  var paModal = document.getElementById('paLoginModal');
-  if (paModal) paModal.style.display = 'none';
-  var loginModal = document.getElementById('loginModal');
-  if (loginModal) loginModal.style.display = 'none';
-  hideWelcomeScreen();
-  document.querySelectorAll('.tab-btn:not(.pa-tab-btn)').forEach(function(b) { b.style.display = 'none'; });
-  document.querySelectorAll('.tab-content:not(.pa-section)').forEach(function(c) { c.classList.remove('active'); });
-  document.querySelectorAll('.pa-tab-btn').forEach(function(b) { b.style.display = 'inline-block'; });
-  var badge = document.getElementById('activeUserBadge');
-  if (badge) badge.innerText = platformAdminUser.name + ' (Platform Admin)';
-  try { applyPlatformBranding(); } catch (e) {}
-  ftbShowWelcomeSplash();
-  switchPATab('paDashboardTab');
-  renderPlatformAdminViews();
-}
-
-async function performPlatformAdminLogin() {
-  var button = document.querySelector('[onclick="performPlatformAdminLogin()"]');
-  var password = document.getElementById('paLoginPassword').value;
-  if (!password) return alert('Enter your platform administrator password.');
-  if (button) { button.disabled = true; button.textContent = 'Signing in...'; }
-  try {
-    await firebasePlatformAdminSignIn(password);
-    document.getElementById('paLoginPassword').value = '';
-    enterPlatformAdminMode();
-  } catch (error) { alert(ftAccountError(error)); }
-  finally { if (button) { button.disabled = false; button.textContent = 'Sign In to Platform Portal'; } }
-}
-
-/* Firebase-backed platform admin sign-in (email-link reset friendly). */
-async function firebasePlatformAdminSignIn(password) {
-  try { await waitForPlatformData(2500); } catch (e) {}
-  var email = ftEmail(document.getElementById('paLoginName').value), expectedEmail = platformAdminEmail();
-  if (!email || (expectedEmail && email !== expectedEmail)) throw new Error('This email is not the platform administrator. Business administrators must use Admin Login.');
-  var credential = await firebaseAuth().signInWithEmailAndPassword(email, password);
-  if (ftBootstrap && credential.user.uid !== ftBootstrap.uid) {
-    await firebaseAuth().signOut();
-    throw new Error('This identity is not authorized for the platform portal.');
-  }
-  /* Complete a setup interrupted after the immutable reservation was saved. */
-  var snapshot = await firebase.database().ref('atmos_platform_admin/credentials').once('value');
-  if (!snapshot.exists() && ftBootstrap && ftBootstrap.uid === credential.user.uid) {
-    await firebase.database().ref('atmos_platform_admin').update({ credentials: ftBootstrap, setupCompleted: true, public: { hasPlatformAdmin: true, platformAdminEmail: ftBootstrap.email, branding: platformData.branding, updatedAt: Date.now() } });
-    platformData.credentials = ftBootstrap;
-    ftAcceptPublic({ hasPlatformAdmin: true, platformAdminEmail: ftBootstrap.email, branding: platformData.branding, updatedAt: Date.now() });
-  }
-  await ftAttachPlatform(credential.user.uid);
-  return credential;
-}
+/* Platform sign-in and portal initialization are defined in fintrack-login.js. */
 
 /* PA password reset — sends a single-use reset link to the PA email. */
 function requestPaPasswordReset() {
@@ -10067,15 +9941,7 @@ function switchPATab(tabId, btnElem) {
 }
 
 /* RENDER ALL PLATFORM ADMIN VIEWS */
-function renderPlatformAdminViews() {
-  if (!platformAdminUser) return;
-  renderPADashboard();
-  renderPABusinesses();
-  renderPASubscriptions();
-  renderPANotifications();
-  renderPAReports();
-  renderPASettings();
-}
+/* Role-specific portal rendering is defined in fintrack-login.js. */
 
 /* ===== DASHBOARD ===== */
 /* ===== WELCOME MESSAGE FOR NEW BUSINESS ADMINISTRATORS ===== */
@@ -11747,7 +11613,7 @@ function hideWelcomeScreen() {
    masking the brief Firebase data load. No delay or blank screen behind it. */
 function ftbShowWelcomeSplash() {
   ftbHideBootSplash();
-  var existing = document.getElementById('ftbWelcomeSplash'); if (existing) existing.remove();
+  var existing = document.getElementById('ftbWelcomeSplash'); if (existing) return;
   /* Platform splash artwork only: the business's own logo is never used here, so
      admin, staff and platform admin all see the same platform name and logo. */
   var logo = 'https://media.base44.com/images/public/6ad20c8082d97b3bd37417ae/266afcba3_IMG_2552.jpg';
@@ -13932,7 +13798,7 @@ function paPrepareTenantAssociations() {
   });
 }
 
-</script><script src="fintrack-extras.js"></script>
+</script>
 <script>
 window.ftOpenMgmtGroup = function (key) { ['staff', 'money'].forEach(function (g) { var p = document.getElementById('ftMgmtPanel-' + g); var b = document.getElementById('ftMgmtBtn-' + g); if (!p) return; var isThis = (g === key); p.style.display = isThis ? 'grid' : 'none'; if (b) { b.classList.toggle('active', isThis); b.setAttribute('aria-selected', isThis ? 'true' : 'false'); } }); };
 window.ftHideHrSections = function () { window.__ftOpenAdminSection = null; (window.FT_HR_SECTIONS || []).forEach(function (id) { var el = document.getElementById(id); if (el) el.style.display = 'none'; }); };
@@ -14779,7 +14645,7 @@ if (typeof __ftSwitchTab === 'function') {
   /* Retired screenshot/base64 path cannot be invoked from an old control. */
   doSubmitPayment = function () { return submitPayment(); };
   var oldCard = buildBizSubCardHtml; buildBizSubCardHtml = function () { var html = oldCard(); if (hasPendingPayment()) html = html.replace(/<button class="btn-admin" onclick="openPaSubmitPayment\(\)"[\s\S]*?<\/button>/, '<p style="font-weight:800;color:var(--accent-amber)">Payment submitted successfully. Waiting for verification and approval from the platform administrator.</p>'); return html; };
-  F.mountPayment();
+  document.addEventListener('DOMContentLoaded', function () { F.mountPayment(); }, { once: true });
 })();
 
 </script>
@@ -15044,7 +14910,8 @@ if (typeof __ftSwitchTab === 'function') {
     try { ftRenderAccessLock(); } catch (e) {}
   };
   window.ftSubscriptionBootGate = function () {
-    if (platformAdminUser) return;
+    if (platformAdminUser || !currentUser || !F.bid()) { window.ftSubscriptionRelease(); return; }
+    if (readyBiz === F.bid() || document.body.classList.contains('ft-sub-checking')) return;
     readyBiz = '';
     if (F.known()) { window.ftSubscriptionReady(); return; }
     document.body.classList.add('ft-sub-checking');
@@ -15088,7 +14955,7 @@ if (typeof __ftSwitchTab === 'function') {
   var st = document.createElement('style'); st.id = 'ftRequestedSubscriptionGateStyle'; st.textContent = 'body.ft-sub-locked .tab-content,body.ft-sub-locked nav,body.ft-sub-locked .tab-bar,body.ft-sub-locked .floating-support,body.ft-sub-checking .tab-content,body.ft-sub-checking nav,body.ft-sub-checking .tab-bar{visibility:hidden!important} @media print{body.ft-sub-locked #printableInvoiceArea,body.ft-sub-locked #printableInvoiceArea *{visibility:hidden!important}}'; document.head.appendChild(st);
   window.addEventListener('pageshow', function () { if (currentUser && !platformAdminUser && readyBiz !== F.bid()) window.ftSubscriptionBootGate(); ftRenderAccessLock(); });
   window.addEventListener('popstate', function () { if (F.hard()) ftRenderAccessLock(); });
-  var complete = completeLogin; completeLogin = function (user) { window.ftSubscriptionBootGate(); complete(user); if (readyBiz === F.bid()) window.ftSubscriptionReady(); };
+  var complete = completeLogin; completeLogin = function (user) { var result = complete(user); window.ftSubscriptionBootGate(); return result; };
   F.referralBoot = F.bind;
   var own = listenOwnBusinessRecord; listenOwnBusinessRecord = function () { own(); F.bind(); };
   ftRenderAccessLock();
@@ -18125,5 +17992,246 @@ async function ftPersistPlatformData() {
   #ftcWizard .ftc-wz-panel table{min-width:520px}
   #ftcWizard h3{font-size:.98rem}
 </style>
+<script>
+/* Role-specific startup for the existing FinTrack Firebase application. */
+var ftPlatformRenderTimer = null;
+
+function ftLoginRequest(request) {
+  return new Promise(function (resolve, reject) {
+    var timer = setTimeout(function () {
+      var error = new Error('Sign-in could not finish loading your account. Check your connection and try again.');
+      error.code = 'LOGIN_TIMEOUT';
+      reject(error);
+    }, 15000);
+    Promise.resolve(request).then(function (value) { clearTimeout(timer); resolve(value); }, function (error) { clearTimeout(timer); reject(error); });
+  });
+}
+
+function ftSyncPlatformIdentity(identity) {
+  var live = firebaseAuth().currentUser;
+  var uid = identity ? identity.uid : null;
+  /* Ignore an obsolete queued event, and initialize each verified identity once. */
+  if (uid !== (live ? live.uid : null) || uid === ftObservedAuthUid) return;
+  ftObservedAuthUid = uid;
+  ftStopPlatform();
+  if (authBusinessId) detachTenant();
+  currentUser = null;
+  platformAdminUser = null;
+  platformData.credentials = null;
+  platformData.businesses = {};
+  platformData.payments = {};
+  platformData.notifications = {};
+}
+
+function ftStopPlatform() {
+  ftPlatformEpoch++;
+  clearTimeout(ftPlatformRenderTimer);
+  ftPlatformRenderTimer = null;
+  if (platformDbRef) platformDbRef.off();
+  platformDbRef = null;
+  ftPlatformListenerUid = null;
+  platformSyncActive = false;
+}
+
+function ftSchedulePlatformRender() {
+  if (ftPlatformRenderTimer !== null) return;
+  ftPlatformRenderTimer = setTimeout(function () {
+    ftPlatformRenderTimer = null;
+    if (platformAdminUser) renderPlatformAdminViews();
+  }, 0);
+}
+
+async function ftAttachPlatform(uid) {
+  ftSyncPlatformIdentity(firebaseAuth().currentUser);
+  var epoch = ftPlatformEpoch;
+  var ref = firebase.database().ref('atmos_platform_admin');
+  var snapshot = await ftLoginRequest(ref.once('value'));
+  function sameSession() {
+    var identity = firebaseAuth().currentUser;
+    if (!identity || identity.uid !== uid || epoch !== ftPlatformEpoch) throw new Error('Session changed. Please sign in again.');
+  }
+  sameSession();
+  var value = snapshot.val() || {};
+  /* Preserve recovery of a setup interrupted after its immutable reservation. */
+  if (!value.credentials && ftBootstrap && ftBootstrap.uid === uid) {
+    var recovered = { credentials: ftBootstrap, setupCompleted: true, public: { hasPlatformAdmin: true, platformAdminEmail: ftBootstrap.email, branding: platformData.branding, updatedAt: Date.now() } };
+    await ftLoginRequest(ref.update(recovered));
+    sameSession();
+    value = Object.assign({}, value, recovered);
+    ftAcceptPublic(recovered.public);
+  }
+  if (!value.credentials || value.credentials.uid !== uid || (ftBootstrap && ftBootstrap.uid !== uid)) throw new Error('This identity is not the platform administrator. Use the business administrator login instead.');
+  platformData = Object.assign({}, platformData, value);
+  ftKeepSavedBranding();
+  platformDbRef = ref;
+  platformSyncActive = true;
+  if (ftPlatformListenerUid !== uid) {
+    ref.off();
+    ftPlatformListenerUid = uid;
+    ref.on('value', function (next) {
+      var identity = firebaseAuth().currentUser;
+      if (!identity || identity.uid !== uid || epoch !== ftPlatformEpoch) return;
+      var data = next.val();
+      if (!data || !data.credentials || data.credentials.uid !== uid) return;
+      platformData = Object.assign({}, platformData, data);
+      ftKeepSavedBranding();
+      platformSyncActive = true;
+      updatePlatformAdminLoginUI();
+      if (platformAdminUser) { platformAdminUser = data.credentials; ftSchedulePlatformRender(); }
+    }, function (error) { platformSyncActive = false; console.error('Platform access refused:', error); });
+  }
+  updatePlatformAdminLoginUI();
+  return value.credentials;
+}
+
+async function firebasePlatformAdminSignIn(password) {
+  try { await waitForPlatformData(2500); } catch (e) { /* Protected identity records below still decide access. */ }
+  var email = ftEmail(document.getElementById('paLoginName').value);
+  var expected = platformAdminEmail();
+  if (!email || (expected && expected !== email)) throw new Error('This email is not the platform administrator. Business administrators must use Admin Login.');
+  var auth = firebaseAuth();
+  if (!auth) throw new Error('Secure sign-in is unavailable. Reload the page and try again.');
+  var credential = await ftLoginRequest(auth.signInWithEmailAndPassword(email, password));
+  ftSyncPlatformIdentity(credential.user);
+  if (ftBootstrap && credential.user.uid !== ftBootstrap.uid) {
+    await auth.signOut();
+    throw new Error('This identity is not authorized for the platform portal.');
+  }
+  await ftAttachPlatform(credential.user.uid);
+  return credential;
+}
+
+function enterPlatformAdminMode() {
+  var identity = firebaseAuth().currentUser;
+  if (!identity || !platformSyncActive || !platformData.credentials || platformData.credentials.uid !== identity.uid || (ftBootstrap && ftBootstrap.uid !== identity.uid)) throw new Error('Verified platform administrator sign-in is required.');
+  detachTenant();
+  currentUser = null;
+  platformAdminUser = platformData.credentials;
+  ftbShowWelcomeSplash();
+  if (window.ftSubscriptionRelease) window.ftSubscriptionRelease();
+  document.body.classList.remove('guest-mode', 'ft-sub-locked');
+  document.body.classList.add('pa-mode');
+  document.getElementById('paLoginModal').style.display = 'none';
+  document.getElementById('loginModal').style.display = 'none';
+  hideWelcomeScreen();
+  document.querySelectorAll('.tab-btn:not(.pa-tab-btn)').forEach(function (button) { button.style.display = 'none'; });
+  document.querySelectorAll('.tab-content:not(.pa-section)').forEach(function (section) { section.classList.remove('active'); });
+  document.querySelectorAll('.pa-tab-btn').forEach(function (button) { button.style.display = 'inline-block'; });
+  var badge = document.getElementById('activeUserBadge');
+  if (badge) badge.innerText = platformAdminUser.name + ' (Platform Admin)';
+  applyPlatformBranding();
+  switchPATab('paDashboardTab');
+  setTimeout(function () {
+    var button = document.getElementById('btn-adminTab'); if (button) button.style.display = 'inline-block';
+    var drawer = document.getElementById('drawer-adminTab'); if (drawer) drawer.style.display = 'flex';
+    paPrepareTenantAssociations();
+  }, 0);
+}
+
+async function performPlatformAdminLogin() {
+  var button = document.querySelector('[onclick="performPlatformAdminLogin()"]');
+  if (button && button.disabled) return;
+  var status = document.getElementById('paLoginError');
+  status.textContent = ''; status.style.display = 'none';
+  var password = document.getElementById('paLoginPassword').value;
+  if (!password) { status.textContent = 'Enter your platform administrator password.'; status.style.display = 'block'; return; }
+  if (button) { button.disabled = true; button.textContent = 'Signing in...'; }
+  try {
+    await firebasePlatformAdminSignIn(password);
+    document.getElementById('paLoginPassword').value = '';
+    enterPlatformAdminMode();
+  } catch (error) {
+    var splash = document.getElementById('ftbWelcomeSplash'); if (splash) splash.remove();
+    document.getElementById('paLoginModal').style.display = 'flex';
+    status.textContent = ftAccountError(error);
+    status.style.display = 'block';
+  } finally { if (button) { button.disabled = false; button.textContent = 'Sign In to Platform Portal'; } }
+}
+
+/* ------------------------------------------------------------------
+   STAFF SIGN-IN DIRECTORY
+   A staff member signs in with nothing but a mobile number, so the only
+   way the login screen can find their business is this small routing
+   index. It must be rewritten the moment staff credentials change -
+   writing it only at the administrator's next sign-in left freshly
+   added staff looking unregistered.
+   ------------------------------------------------------------------ */
+var ftStaffIndexSignature = '';
+var ftStaffIndexChain = Promise.resolve();
+
+window.ftPublishSigninIndex = function (businessId, data, actor, accountKey, publishHandle, normalizeEmail) {
+  if (!businessId || !data || !actor || actor.role !== 'Admin' || typeof publishHandle !== 'function') return Promise.resolve();
+  var wanted = [];
+  (data.users || []).forEach(function (user) {
+    var entry = { b: businessId, a: accountKey(user), g: user.authVersion || 1 };
+    if (user.email) wanted.push({ handle: normalizeEmail(user.email), entry: entry });
+    var digits = String(user.mobile === null || user.mobile === undefined ? '' : user.mobile).replace(/[^0-9]/g, '');
+    if (digits) wanted.push({ handle: digits, entry: entry });
+  });
+  /* Publishing is skipped only when every handle already points at exactly this
+     account and generation, so repeated saves never churn the database. */
+  var signature = businessId + '|' + wanted.map(function (w) { return w.handle + ':' + w.entry.a + ':' + w.entry.g; }).join(',');
+  if (signature === ftStaffIndexSignature) return Promise.resolve();
+  return Promise.all(wanted.map(function (w) {
+    return publishHandle(w.handle, w.entry, true).catch(function (error) {
+      /* One number already used by another business must never stop the rest of
+         this business's staff from signing in. */
+      console.error('Sign-in entry not published for ' + w.handle + ':', (error && error.message) || error);
+    });
+  })).then(function () { ftStaffIndexSignature = signature; });
+};
+
+window.ftAfterStaffSaved = function () {
+  var publish = window.ftStaffIndexPublish;
+  if (!publish) return Promise.resolve();
+  ftStaffIndexChain = ftStaffIndexChain.catch(function () {}).then(function () { return publish(); })
+    .catch(function (error) { console.error('Sign-in directory publish failed:', error); });
+  return ftStaffIndexChain;
+};
+
+function renderPlatformAdminViews() {
+  if (!platformAdminUser) return;
+  /* Initial sign-in renders only its destination; other panels render on opening. */
+  var views = {
+    paDashboardTab: renderPADashboard,
+    paBusinessesTab: renderPABusinesses,
+    paSubscriptionsTab: renderPASubscriptions,
+    paNotificationsTab: renderPANotifications,
+    paReportsTab: renderPAReports,
+    paSettingsTab: renderPASettings,
+    ftLiveStatusTab: window.ftRenderLiveStatus
+  };
+  var render = views[currentPATab];
+  if (render) render();
+}
+
+/* ------------------------------------------------------------------
+   MONTHLY WELCOME
+   The welcome overlay belongs to the first sign-in of a month, once the
+   previous month has been closed - not to every single sign-in. It is
+   tracked per account, so every staff member and the business admin each
+   see it once for the month.
+   ------------------------------------------------------------------ */
+function ftbPrevMonthKey(monthKey) {
+  var year = parseInt(monthKey.slice(0, 4), 10);
+  var month = parseInt(monthKey.slice(5, 7), 10) - 1;
+  if (month === 0) { month = 12; year = year - 1; }
+  return year + '-' + (month < 10 ? '0' + month : '' + month);
+}
+
+window.ftbMonthlyWelcomeSplash = function (user) {
+  try {
+    var month = getISTMonthStr();
+    var closed = !!(appData && appData.closedMonths && appData.closedMonths[ftbPrevMonthKey(month)]);
+    if (!closed) return false;
+    var key = 'ATMOS_MONTH_WELCOME|' + (authBusinessId || 'PLATFORM') + '|' + ((user && user.id) || 'guest') + '|' + month;
+    if (localStorage.getItem(key)) return false;
+    localStorage.setItem(key, String(Date.now()));
+  } catch (error) { return false; }
+  ftbShowWelcomeSplash();
+  return true;
+};
+
+</script>
 </body>
 </html>
