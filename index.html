@@ -1267,6 +1267,10 @@ html, body { background-color: transparent !important; background-image: none !i
               <option value="Bank/UPI">Bank / UPI</option>
             </select>
           </div>
+          <div class="form-group" style="margin: 0; flex: 2; min-width: 200px;">
+            <label>Settlement Remarks (optional)</label>
+            <input type="text" id="receivableSettleRemarks" placeholder="Receipt no., who paid, notes...">
+          </div>
           <button type="button" class="btn-primary" onclick="settleSelectedReceivable()" style="width: auto; background: var(--atmos-red); height: 42px;">Settle Selected Receivable</button>
         </div>
       </div>
@@ -1341,8 +1345,8 @@ html, body { background-color: transparent !important; background-image: none !i
         <a href="https://wa.me/918089278115" target="_blank" class="support-btn-outline" style="border-color: #10b981; color: #059669;">
           <i class="fa-brands fa-whatsapp"></i> 8089278115 (WhatsApp)
         </a>
-        <a href="tel:8089278115" class="support-btn-outline">
-          <i class="fa-solid fa-phone"></i> 9895638115
+        <a href="mailto:fintrackappsupport@gmail.com" class="support-btn-outline">
+          <i class="fa-solid fa-envelope"></i> fintrackappsupport@gmail.com
         </a>
       </div>
     </div>
@@ -2188,6 +2192,7 @@ html, body { background-color: transparent !important; background-image: none !i
         </div>
         <span id="closingStatusBadge" class="badge badge-open">Status: Open</span>
         <button id="btnCloseMonthToggle" class="btn-admin" onclick="toggleMonthClosing()" style="width: auto;">Close Month & Transfer Balances</button>
+        <button id="btnViewClosingReport" class="btn-secondary" style="width: auto; display:none;" onclick="ftcOpenClosingWizard((document.getElementById('monthClosingPicker')||{}).value)"><i class="fa-solid fa-file-lines"></i> Closing Report</button>
         <button id="btnSaveMonthToHistorical" class="btn-primary" onclick="saveCurrentMonthToHistorical()" style="width: auto; background: var(--accent-amber); display: none;">Save Final Month to Historical Data</button>
       </div>
 
@@ -3580,7 +3585,12 @@ const FIREBASE_CONFIG = {
         isSplit: !!s.isSplit, splitCash: s.splitCash || 0, splitBank: s.splitBank || 0, splitReceivable: s.splitReceivable || 0,
         user: s.staff, notes: s.notes || "", time: s.time || "", timestamp: s.timestamp || Date.now(),
         receivablePersonName: s.receivablePersonName || "",
-        settled: s.isSplit ? !(parseFloat(s.splitReceivable || 0) > 0) : (s.payMode !== 'Receivables/Credit')
+        settled: s.isSplit ? !(parseFloat(s.splitReceivable || 0) > 0) : (s.payMode !== 'Receivables/Credit'),
+        settlements: (s.settlements || []).map(function (x) { return { id: x.id, date: x.date, time: x.time, timestamp: x.timestamp, cash: x.cash, bank: x.bank, total: x.total, mode: x.mode, remarks: x.remarks, by: x.by, byRole: x.byRole }; }),
+        originalPayMode: s.originalPayMode || '',
+        settledDate: s.settledDate || '',
+        settledTime: s.settledTime || '',
+        settledMode: s.settledMode || ''
       })),
       expenseEntries: appData.expenseLog.slice().reverse().map(e => ({
         id: e.id, date: e.date, category: e.category, description: e.desc,
@@ -4537,7 +4547,12 @@ const FIREBASE_CONFIG = {
         splitReceivable: parseFloat(e.splitReceivable) || 0,
         staff: e.user || e.staff || "",
         notes: e.notes || "",
-        receivablePersonName: e.receivablePersonName || ""
+        receivablePersonName: e.receivablePersonName || "",
+        settlements: Array.isArray(e.settlements) ? e.settlements : [],
+        originalPayMode: e.originalPayMode || '',
+        settledDate: e.settledDate || '',
+        settledTime: e.settledTime || '',
+        settledMode: e.settledMode || ''
       }));
       converted.forEach(c => { if (c.isSplit) c.payMode = 'Split Payment'; });
       out.serviceLog = converted.reverse();
@@ -5704,6 +5719,7 @@ const FIREBASE_CONFIG = {
     renderHrTab();
     renderLoginPinSettings();
     try { applyAdminGroups(); } catch (e) {}
+    try { if (typeof ftClosingTick === 'function') ftClosingTick(); } catch (e) {}
   }
 
   /* ---------------------------------------------------
@@ -6254,24 +6270,20 @@ const FIREBASE_CONFIG = {
     const selected = document.querySelector('input[name="receivableSelectRadio"]:checked');
     if (!selected) return alert("Please select a receivable record to settle.");
 
-    const id = selected.value;
-    const s = appData.serviceLog.find(x => x.id === id);
-    if (!s) return;
-
+    const rec = appData.serviceLog.find(x => x.id === selected.value);
+    if (!rec) return;
     const dest = document.getElementById('receivableSettleDestination').value;
+    const remarksEl = document.getElementById('receivableSettleRemarks');
+    const due = window.ftcReceivableDue ? window.ftcReceivableDue(rec) : parseFloat(rec.total || 0);
 
-    if (s.isSplit || s.payMode === 'Split Payment') {
-      const recAmt = parseFloat(s.splitReceivable || 0);
-      if (dest === 'Cash Drawer') s.splitCash = parseFloat(s.splitCash || 0) + recAmt;
-      else s.splitBank = parseFloat(s.splitBank || 0) + recAmt;
-      s.splitReceivable = 0;
-    } else {
-      s.payMode = dest;
+    /* PART 2 - settled on the SAME service entry: no duplicate entry, the
+       original amount untouched, and the date, time, mode, amount, remarks and
+       staff member recorded on that entry. */
+    if (window.ftcSettleDirect) {
+      const ok = window.ftcSettleDirect(rec.id, dest === 'Cash Drawer' ? due : 0, dest === 'Cash Drawer' ? 0 : due, remarksEl ? remarksEl.value : '');
+      if (ok) alert('Receivable of \u20B9' + due.toFixed(2) + ' settled into ' + dest + '.');
+      return;
     }
-
-    saveData();
-    alert(`Receivable of ₹${s.total} settled into ${dest}!`);
-    refreshAllViews();
   }
 
   /* ---------------------------------------------------
@@ -6447,6 +6459,9 @@ const FIREBASE_CONFIG = {
 
   function recordServiceEntry(e) {
     e.preventDefault();
+    /* PART 12 - a double press can never record the same service twice. */
+    if (window.__ftcServiceGuard && (Date.now() - window.__ftcServiceGuard) < 1500) return;
+    window.__ftcServiceGuard = Date.now();
     if (!currentUser) return alert("Please sign in first.");
     if (staffMobileBlocked()) return alert("Mobile View-Only Mode: adding, editing and deleting are disabled on this device.");
 
@@ -6533,22 +6548,22 @@ const FIREBASE_CONFIG = {
     saveData();
     alert("Service transaction logged successfully!");
 
-    // Reset form - back to "Select a Service" with all fields cleared
+    /* PART 12 - after a successful entry the date, the time, the payment mode,
+       the selected service type and the service details stay exactly as chosen;
+       only the fee, the discount and the notes clear, and the total recalculates
+       from zero. */
     document.getElementById('serviceNotesInput').value = '';
     document.getElementById('discountAmt').value = 0;
     document.getElementById('deptFeeInput').value = 0;
     document.getElementById('basePrice').value = 0;
-    document.getElementById('serviceSelect').value = '';
-    document.getElementById('serviceSearchInput').value = '';
-    document.getElementById('customServiceNameInput').value = '';
-    document.getElementById('customServiceDetailsInput').value = '';
-    document.getElementById('customServiceEntryGroup').style.display = 'none';
     document.getElementById('splitCashInput').value = 0;
     document.getElementById('splitBankInput').value = 0;
     document.getElementById('splitReceivableInput').value = 0;
     document.getElementById('splitPaymentToggle').checked = false;
     if (document.getElementById('receivablePersonName')) document.getElementById('receivablePersonName').value = '';
-    toggleSplitPaymentUI();
+    var _ftSearch = document.getElementById('serviceSearchInput');
+    if (_ftSearch) _ftSearch.value = '';
+
     calculateFinalPrice();
     refreshAllViews();
   }
@@ -6650,6 +6665,8 @@ const FIREBASE_CONFIG = {
         <td>${s.staff || s.user || '\u2014'}</td>
         <td>
           ${!isClosed ? `
+            ${(window.ftcReceivableDue && window.ftcReceivableDue(s) > 0.004) ? `<button onclick="ftcOpenSettle('${s.id}')" style="background:none; color:var(--accent-purple); padding:2px 6px; font-size:0.7rem; font-weight:800;"><i class="fa-solid fa-hand-holding-dollar"></i> Settle</button>` : ''}
+            ${(window.ftcHistoryText && s.settlements && s.settlements.length) ? `<span class="ftc-history" style="display:block; color:var(--accent-green); font-weight:700; margin-top:2px;">Settled: ${ftcHistoryText(s)}</span>` : ''}
             <button class="mobile-restricted" onclick="openEditServiceModal('${s.id}')" style="background:none; color:var(--primary); padding:2px 6px;"><i class="fa-solid fa-pen"></i></button>
             <button class="mobile-restricted" onclick="deleteServiceRecord('${s.id}')" style="background:none; color:var(--accent-rose); padding:2px 6px;"><i class="fa-solid fa-trash"></i></button>
           ` : '<span style="color:var(--text-muted); font-size:0.75rem;">Locked</span>'}
@@ -7345,7 +7362,8 @@ const FIREBASE_CONFIG = {
       items: [...currentInvoiceItems],
       total: parseFloat(document.getElementById('invTotalVal').innerText || 0),
       createdById: (previous && previous.createdById) || (currentUser ? currentUser.id : ''),
-      createdByName: (previous && previous.createdByName) || (currentUser ? currentUser.name : '')
+      createdByName: (previous && previous.createdByName) || (currentUser ? currentUser.name : ''),
+      savedAt: (previous && previous.savedAt) || Date.now()
     };
 
     if (isUpdate && editingInvoiceId) {
@@ -7363,12 +7381,21 @@ const FIREBASE_CONFIG = {
 
   function populateSavedInvoicesDropdown() {
     const select = document.getElementById('savedInvoiceSelect');
+    if (!select) return;
     select.innerHTML = '<option value="">-- New Invoice --</option>';
 
-    appData.invoices.forEach(inv => {
+    /* PART 8 - the 10 most recent invoices only, newest first, customer name
+       first so the right bill is recognisable. Older invoices are never
+       deleted - they stay in Invoice History. */
+    const ordered = appData.invoices.map((inv, i) => ({ inv: inv, i: i, t: parseFloat(inv.savedAt || 0) }));
+    ordered.sort((a, b) => (b.t - a.t) || (a.i - b.i));
+
+    ordered.slice(0, 10).forEach(function (row) {
+      const inv = row.inv;
       const opt = document.createElement('option');
       opt.value = inv.id;
-      opt.innerText = `${inv.id} - ${inv.customerName || 'Customer'} (₹${inv.total})`;
+      const name = (inv.customerName || '').trim() || 'Walk-in Customer';
+      opt.innerText = name + ' \u00B7 ' + inv.date + ' \u00B7 ' + inv.id + ' (\u20B9' + inv.total + ')';
       select.appendChild(opt);
     });
   }
@@ -7443,6 +7470,7 @@ const FIREBASE_CONFIG = {
 
     const tbody = document.getElementById('reportItemizedTable');
     tbody.innerHTML = '';
+    const rows = [];
 
     services.forEach(s => {
       const netSrv = parseFloat(s.serviceCharge || 0) - parseFloat(s.discount || 0);
@@ -7460,7 +7488,7 @@ const FIREBASE_CONFIG = {
         <td>-</td>
         <td>${s.staff || s.user || '\u2014'}</td>
       `;
-      tbody.appendChild(tr);
+      rows.push({ t: entryDateTimeValue(s), i: rows.length, tr: tr });
     });
 
     expenses.forEach(e => {
@@ -7477,10 +7505,12 @@ const FIREBASE_CONFIG = {
         <td style="color:var(--accent-rose); font-weight:800;">₹${amt.toFixed(2)}</td>
         <td>${e.staff || e.user || '\u2014'}</td>
       `;
-      tbody.appendChild(tr);
+      rows.push({ t: entryDateTimeValue(e), i: rows.length, tr: tr });
     });
 
-    Array.prototype.slice.call(tbody.children).sort(function(a, b) { var aDT = (a.cells[1] ? a.cells[1].textContent.trim() : ''); var bDT = (b.cells[1] ? b.cells[1].textContent.trim() : ''); return bDT.localeCompare(aDT); }).forEach(function(tr) { tbody.appendChild(tr); });
+    /* Newest entry first, oldest last - services and expenses interleaved on
+       the real entry time, not on the printed text. */
+    rows.sort(function (a, b) { return (b.t - a.t) || (a.i - b.i); }).forEach(function (r) { tbody.appendChild(r.tr); });
     const netBal = rev - exp;
 
     document.getElementById('rptRevenue').innerText = `₹${rev.toFixed(2)}`;
@@ -7566,6 +7596,9 @@ const FIREBASE_CONFIG = {
 
     var saveHistBtn = document.getElementById('btnSaveMonthToHistorical');
     if (saveHistBtn) saveHistBtn.style.display = isClosed ? 'inline-block' : 'none';
+
+    var reportBtn = document.getElementById('btnViewClosingReport');
+    if (reportBtn) reportBtn.style.display = isClosed ? 'inline-block' : 'none';
 
     var bal = getOperatingBalances(month);
     var op = appData.openingBalances[month] || { cash: 0, bank: 0, credit: 0 };
@@ -16001,5 +16034,1348 @@ async function ftPersistPlatformData() {
   });
   PA_FIREBASE_RULES = JSON.stringify({ rules: rules }, null, 2);
 })();
-</script></body>
+</script>
+<style>
+/* ==========================================================================
+   FinTrack Business — v14 additions
+   PART 7  full-content list scrolling
+   PART 9  centred summary / KPI tiles
+   PART 3/4 mandatory monthly closing gate + staff greeting
+   PART 2/5/6 month-end closing wizard
+   ========================================================================== */
+
+/* ---------- PART 7 : lists show every record inside their own scroll area -- */
+.ft-list {
+  max-height: 68vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 10px;
+}
+.ft-list table { min-width: 100%; }
+.ft-list thead th { position: sticky; top: 0; z-index: 3; background: #f8fafc; }
+.catalog-scroll { max-height: none; }
+#attendanceMgmtScroll { max-height: 68vh; }
+
+/* ---------- PART 9 : summary / KPI boxes are centre aligned ---------------- */
+.ftc-kpi {
+  text-align: center !important;
+  justify-content: center;
+}
+.ftc-kpi.ftc-kpi-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.ftc-kpi > div,
+.ftc-kpi > span,
+.ftc-kpi > strong,
+.ftc-kpi > p {
+  text-align: center !important;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ---------- PART 3/4 : closing gate ---------------------------------------- */
+#ftcGate {
+  position: fixed;
+  inset: 0;
+  z-index: 2380;
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px 40px;
+  overflow: auto;
+  background: #eef2f7;
+}
+#ftcGate .ftc-gate-card {
+  width: 100%;
+  max-width: 640px;
+  margin: auto;
+  background: #fff;
+  border-radius: 18px;
+  padding: 30px 28px;
+  box-shadow: 0 26px 60px rgba(11, 30, 45, .18);
+  border-top: 6px solid var(--atmos-red, #c0272d);
+}
+#ftcGate .ftc-gate-card.staff { border-top-color: var(--accent-amber, #f59e0b); }
+#ftcGate h2 { font-size: 1.3rem; font-weight: 900; color: var(--atmos-navy, #0b1e2d); margin: 0 0 6px; }
+#ftcGate .ftc-gate-month {
+  display: inline-block;
+  margin: 8px 0 16px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  font-weight: 800;
+  font-size: .9rem;
+  color: var(--atmos-navy, #0b1e2d);
+}
+#ftcGate ul { margin: 0 0 18px 18px; padding: 0; font-size: .87rem; line-height: 1.7; color: #334155; }
+#ftcGate ul li { list-style: disc; }
+#ftcGate .ftc-gate-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+#ftcGate .ftc-gate-actions button { width: auto; }
+
+/* ---------- late-closing allowance reminder -------------------------------- */
+#ftcGate.relax {
+  inset: auto 0 0 0;
+  padding: 0 14px 14px;
+  background: transparent;
+  overflow: visible;
+  align-items: flex-end;
+  pointer-events: none;
+}
+#ftcGate.relax .ftc-relax-bar {
+  pointer-events: auto;
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: #0b1e2d;
+  color: #fff;
+  border-radius: 14px;
+  padding: 12px 16px;
+  box-shadow: 0 18px 40px rgba(11, 30, 45, .28);
+  border-left: 6px solid #f59e0b;
+}
+#ftcGate.relax .ftc-relax-text { display: flex; flex-direction: column; gap: 3px; flex: 1 1 320px; }
+#ftcGate.relax .ftc-relax-text strong { font-size: .88rem; font-weight: 800; }
+#ftcGate.relax .ftc-relax-text span { font-size: .78rem; color: #cbd5e1; line-height: 1.55; }
+#ftcGate.relax .ftc-relax-x {
+  background: transparent; border: 0; color: #94a3b8; cursor: pointer;
+  font-size: 1rem; padding: 4px 8px; border-radius: 8px;
+}
+#ftcGate.relax .ftc-relax-x:hover { color: #fff; background: rgba(255, 255, 255, .12); }
+
+/* ---------- PART 2/5/6 : closing wizard ----------------------------------- */
+#ftcWizard {
+  position: fixed;
+  inset: 0;
+  z-index: 2390;
+  display: none;
+  flex-direction: column;
+  background: #f4f7fb;
+}
+#ftcWizard .ftc-wz-head {
+  background: var(--atmos-navy, #0b1e2d);
+  color: #fff;
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+#ftcWizard .ftc-wz-head h2 { font-size: 1.05rem; font-weight: 900; margin: 0; color: #fff; }
+#ftcWizard .ftc-wz-head .ftc-wz-sub { font-size: .78rem; opacity: .8; font-weight: 600; }
+#ftcWizard .ftc-wz-close {
+  margin-left: auto;
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-weight: 800;
+  cursor: pointer;
+  font-size: .8rem;
+}
+#ftcWizard .ftc-wz-rail {
+  display: flex;
+  gap: 6px;
+  padding: 10px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  overflow-x: auto;
+  flex: 0 0 auto;
+}
+#ftcWizard .ftc-wz-dot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .72rem;
+  font-weight: 800;
+  color: #94a3b8;
+  padding: 5px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+#ftcWizard .ftc-wz-dot.done { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
+#ftcWizard .ftc-wz-dot.current { color: #fff; background: var(--atmos-red, #c0272d); border-color: var(--atmos-red, #c0272d); }
+#ftcWizard .ftc-wz-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 20px;
+}
+#ftcWizard .ftc-wz-panel {
+  background: #fff;
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 6px 18px rgba(11, 30, 45, .06);
+  max-width: 1180px;
+  margin: 0 auto;
+}
+#ftcWizard h3 { font-size: 1.05rem; font-weight: 900; color: var(--atmos-navy, #0b1e2d); margin: 0 0 4px; }
+#ftcWizard .ftc-wz-hint { font-size: .82rem; color: #64748b; margin: 0 0 16px; line-height: 1.6; }
+#ftcWizard .ftc-wz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+#ftcWizard .ftc-wz-tile {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px 10px;
+  text-align: center;
+  background: #fbfdff;
+}
+#ftcWizard .ftc-wz-tile span {
+  display: block;
+  font-size: .66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+#ftcWizard .ftc-wz-tile strong { font-size: 1.15rem; font-weight: 900; color: var(--atmos-navy, #0b1e2d); }
+#ftcWizard .ftc-wz-scroll { max-height: 52vh; overflow: auto; border: 1px solid #e2e8f0; border-radius: 10px; }
+#ftcWizard table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+#ftcWizard table th {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  text-align: left;
+  padding: 9px 10px;
+  font-size: .68rem;
+  text-transform: uppercase;
+  color: #475569;
+  font-weight: 900;
+  white-space: nowrap;
+  z-index: 2;
+}
+#ftcWizard table td { padding: 9px 10px; border-top: 1px solid #eef2f7; vertical-align: top; }
+#ftcWizard .neg { color: var(--accent-rose, #e11d48); font-weight: 800; }
+#ftcWizard .pos { color: #059669; font-weight: 800; }
+#ftcWizard .ftc-wz-foot {
+  flex: 0 0 auto;
+  background: #fff;
+  border-top: 1px solid #e2e8f0;
+  padding: 12px 20px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+#ftcWizard .ftc-wz-foot .ftc-wz-status { font-size: .78rem; font-weight: 700; color: #b45309; margin-right: auto; }
+#ftcWizard .ftc-wz-foot button { width: auto; }
+#ftcWizard .ftc-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 9px;
+  font-size: .84rem;
+  line-height: 1.5;
+}
+#ftcWizard .ftc-check.ok { border-color: #a7f3d0; background: #ecfdf5; }
+#ftcWizard .ftc-check.bad { border-color: #fecaca; background: #fef2f2; }
+#ftcWizard .ftc-check i { margin-top: 2px; }
+#ftcWizard .ftc-check b { display: block; font-weight: 800; }
+
+/* ---------- PART 2 : settlement modal ------------------------------------- */
+#ftcSettleModal {
+  position: fixed;
+  inset: 0;
+  z-index: 2395;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11, 30, 45, .55);
+  padding: 16px;
+}
+#ftcSettleModal .ftc-sm-card {
+  background: #fff;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 460px;
+  padding: 22px;
+  box-shadow: 0 24px 60px rgba(11, 30, 45, .3);
+  max-height: 92vh;
+  overflow: auto;
+}
+#ftcSettleModal h3 { font-size: 1rem; font-weight: 900; margin: 0 0 4px; color: var(--atmos-navy, #0b1e2d); }
+#ftcSettleModal .ftc-sm-due {
+  background: #f1f5f9;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: .82rem;
+  line-height: 1.6;
+  margin: 10px 0 14px;
+}
+#ftcSettleModal .ftc-sm-due strong { font-size: 1rem; color: var(--accent-purple, #7c3aed); }
+#ftcSettleModal label { font-size: .72rem; font-weight: 800; text-transform: uppercase; color: #64748b; display: block; margin: 10px 0 4px; }
+#ftcSettleModal input,
+#ftcSettleModal select,
+#ftcSettleModal textarea { width: 100%; }
+#ftcSettleModal .ftc-sm-actions { display: flex; gap: 10px; margin-top: 16px; }
+#ftcSettleModal .ftc-sm-actions button { flex: 1; }
+.ftc-history { font-size: .7rem; color: #475569; line-height: 1.5; }
+.ftc-history span { display: block; }
+
+/* ---------- PART 4 : staff monthly greeting ------------------------------- */
+#ftcGreeting {
+  position: fixed;
+  inset: 0;
+  z-index: 2385;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11, 30, 45, .5);
+  padding: 16px;
+}
+#ftcGreeting .ftc-greet-card {
+  background: #fff;
+  border-radius: 18px;
+  max-width: 420px;
+  width: 100%;
+  padding: 28px 24px;
+  text-align: center;
+  box-shadow: 0 24px 60px rgba(11, 30, 45, .28);
+}
+#ftcGreeting .ftc-greet-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #ecfdf5;
+  color: #059669;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  margin: 0 auto 14px;
+}
+#ftcGreeting h3 { font-size: 1.1rem; font-weight: 900; margin: 0 0 6px; color: var(--atmos-navy, #0b1e2d); }
+#ftcGreeting p { font-size: .85rem; color: #475569; line-height: 1.6; margin: 0 0 16px; }
+</style>
+
+<!-- ============================ v14 markup ============================ -->
+<div id="ftcWizard">
+  <div class="ftc-wz-head">
+    <div>
+      <h2 id="ftcWzTitle">Monthly Closing</h2>
+      <div class="ftc-wz-sub" id="ftcWzSub"></div>
+    </div>
+    <button class="ftc-wz-close" onclick="ftcCloseWizard()"><i class="fa-solid fa-xmark"></i> Close</button>
+  </div>
+  <div class="ftc-wz-rail" id="ftcWzRail"></div>
+  <div class="ftc-wz-body" id="ftcWzBody"></div>
+  <div class="ftc-wz-foot" id="ftcWzFoot"></div>
+</div>
+
+<div id="ftcSettleModal">
+  <div class="ftc-sm-card">
+    <h3><i class="fa-solid fa-hand-holding-dollar" style="color:#7c3aed;"></i> Settle receivable</h3>
+    <p style="font-size:.78rem;color:#64748b;margin:0;">Recorded on the original service entry &mdash; no duplicate entry is created.</p>
+    <div class="ftc-sm-due" id="ftcSettleDue"></div>
+    <label>Settlement mode</label>
+    <select id="ftcSettleMode" onchange="ftcSettleSyncMode()">
+      <option value="Cash Drawer">Cash Drawer</option>
+      <option value="Bank/UPI">Bank / UPI</option>
+      <option value="Split">Split (cash + bank)</option>
+    </select>
+    <div><label>Cash Drawer amount</label><input type="number" step="0.01" min="0" id="ftcSettleCash" value="0"></div>
+    <div><label>Bank / UPI amount</label><input type="number" step="0.01" min="0" id="ftcSettleBank" value="0"></div>
+    <label>Settlement remarks (optional)</label>
+    <textarea id="ftcSettleRemarks" rows="2" placeholder="Receipt no., who paid, notes..."></textarea>
+    <div class="ftc-sm-actions">
+      <button class="btn-secondary" onclick="ftcCloseSettle()">Cancel</button>
+      <button class="btn-primary" onclick="ftcConfirmSettle()"><i class="fa-solid fa-check"></i> Confirm settlement</button>
+    </div>
+  </div>
+</div>
+
+<div id="ftcGreeting">
+  <div class="ftc-greet-card">
+    <div class="ftc-greet-icon"><i class="fa-solid fa-mug-hot"></i></div>
+    <h3>Welcome back, <span id="ftcGreetingName">Team</span>!</h3>
+    <p>A new financial month has started for <strong id="ftcGreetingMonth"></strong>. Last month is closed and locked, so every balance and report is accurate. Have a great month ahead.</p>
+    <button class="btn-primary" onclick="ftcCloseGreeting()">Start the month</button>
+  </div>
+</div>
+
+<script>
+/* ==========================================================================
+   FinTrack Business — v14 additions
+   PART 2  receivable settlement against the original service entry
+   PART 3  staff waiting screen while the month is being closed
+   PART 4  staff monthly greeting
+   PART 5  month-end closing wizard (8 stages)
+   PART 6  validation + locking
+   PART 7  full-content list scrolling helper
+   PART 9  summary tile centring helper
+   Only ADDS behaviour. It never rewrites an existing engine.
+   ========================================================================== */
+(function () {
+  'use strict';
+
+  var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+  /* ------------------------------------------------------------------ utils */
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
+  function money(v) { return '\u20B9' + num(v).toFixed(2); }
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function monthKeyOf(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1); }
+  function monthLabel(mk) { var p = String(mk).split('-'); return MONTHS[(+p[1]) - 1] + ' ' + p[0]; }
+  function prevMonth(mk) { var p = mk.split('-'), y = +p[0], m = +p[1] - 1; if (m === 0) { m = 12; y -= 1; } return y + '-' + pad(m); }
+  function nextMonth(mk) { var p = mk.split('-'), y = +p[0], m = +p[1] + 1; if (m === 13) { m = 1; y += 1; } return y + '-' + pad(m); }
+  function daysIn(mk) { var p = mk.split('-'); return new Date(+p[0], +p[1], 0).getDate(); }
+  function stampOf(y, mo, d, h, mi) { return ((((y * 13 + mo) * 32 + d) * 24 + h) * 60 + mi); }
+  function nowStamp() { var d = getISTDate(); return stampOf(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()); }
+  function deadlineStamp(mk) { var p = mk.split('-'); return stampOf(+p[0], (+p[1]) - 1, daysIn(mk), 19, 0); }
+
+  function isClosedMonth(mk) { return !!(appData && appData.closedMonths && appData.closedMonths[mk]); }
+  function closingRecord(mk) { var c = appData && appData.closedMonths && appData.closedMonths[mk]; return (c && typeof c === 'object') ? c : null; }
+  function isPlatformAdmin() { try { return !!platformAdminUser; } catch (e) { return false; } }
+  function isAdminUser() { return !!(currentUser && currentUser.role === 'Admin'); }
+
+  /* The month that must be closed right now, or null. Closing becomes due at
+     19:00 IST on the last calendar day of the month. */
+  /* A month only needs closing when the business actually recorded something in
+     it, so a brand-new business is never asked to close an empty month. */
+  function monthHasData(mk) {
+    if ((appData.openingBalances || {})[mk]) return true;
+    var buckets = [appData.serviceLog, appData.expenseLog, appData.transferLog, appData.adminTransfers, appData.invoices];
+    for (var i = 0; i < buckets.length; i++) {
+      var list = buckets[i] || [];
+      for (var j = 0; j < list.length; j++) {
+        if (String(list[j].date || '').substring(0, 7) === mk) return true;
+      }
+    }
+    var sal = (appData.monthlySalaries || {})[mk];
+    return !!(sal && Object.keys(sal).length);
+  }
+
+  function pendingCloseMonth() {
+    if (!appData || !appData.closedMonths) return null;
+    var mk = monthKeyOf(getISTDate());
+    var now = nowStamp();
+    for (var i = 0; i < 36; i++) {
+      if (!monthHasData(mk)) { mk = prevMonth(mk); continue; }
+      if (isClosedMonth(mk)) return null;
+      if (now >= deadlineStamp(mk)) return mk;
+      mk = prevMonth(mk);
+    }
+    return null;
+  }
+
+  /* Late-closing allowance. Only October 2026 uses it, and only for this
+     first closing: it has NO deadline - the month stays open (reminder only,
+     nothing is blocked) until the administrator actually closes it. Every
+     month from here onward follows the standard rule: closing opens after
+     7:00 PM IST on the last day of the month, then the mandatory lock. */
+  var CLOSE_RELAX = { '2026-10': true };
+  var relaxHidden = false;
+  function closingRelaxed(mk) {
+    var until = CLOSE_RELAX[mk];
+    if (!until) return false;
+    return until === true || getISTDateStr() <= until;
+  }
+
+  /* ------------------------------------------------------------ record reads */
+  function entriesOf(mk) {
+    return (appData.serviceLog || []).filter(function (s) { return String(s.date || '').substring(0, 7) === mk; });
+  }
+  function receivableDue(s) {
+    if (!s) return 0;
+    if (s.isSplit || s.payMode === 'Split Payment') return Math.max(0, num(s.splitReceivable));
+    return s.payMode === 'Receivables/Credit' ? Math.max(0, num(s.total)) : 0;
+  }
+  function openReceivables(mk) {
+    return (appData.serviceLog || []).filter(function (s) {
+      if (String(s.date || '').substring(0, 7) > mk) return false;
+      return receivableDue(s) > 0.004;
+    }).sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
+  }
+  function historyText(s) {
+    var list = (s && s.settlements) || [];
+    if (!list.length) return '';
+    var last = list[list.length - 1];
+    var legs = [];
+    if (num(last.cash) > 0) legs.push('Cash ' + money(last.cash));
+    if (num(last.bank) > 0) legs.push('Bank ' + money(last.bank));
+    return legs.join(' + ') + ' on ' + last.date;
+  }
+
+  /* --------------------------------------------------- cash / bank movement */
+  function bookOf(mk) {
+    var op = (appData.openingBalances || {})[mk] || { cash: 0, bank: 0, credit: 0 };
+    var cash = num(op.cash), bank = num(op.bank), credit = num(op.credit);
+    var cashRows = [], bankRows = [];
+    function cr(label, amount, detail) { cashRows.push({ label: label, amount: amount, detail: detail || '' }); }
+    function br(label, amount, detail) { bankRows.push({ label: label, amount: amount, detail: detail || '' }); }
+
+    cr('Opening balance', num(op.cash));
+    br('Opening balance', num(op.bank));
+
+    entriesOf(mk).forEach(function (s) {
+      var total = num(s.total), dept = num(s.deptFee);
+      if (dept > 0) { bank -= dept; br('Department fee paid out', -dept, (s.desc || '') + ' \u00B7 ' + s.date); }
+      if (s.isSplit || s.payMode === 'Split Payment') {
+        var c = num(s.splitCash), b = num(s.splitBank), r = num(s.splitReceivable);
+        if (c) { cash += c; cr('Service collection (cash leg)', c, (s.desc || '') + ' \u00B7 ' + s.date); }
+        if (b) { bank += b; br('Service collection (Bank/UPI leg)', b, (s.desc || '') + ' \u00B7 ' + s.date); }
+        credit += r;
+      } else if (s.payMode === 'Cash Drawer') { cash += total; cr('Service collection', total, (s.desc || '') + ' \u00B7 ' + s.date); }
+      else if (s.payMode === 'Bank/UPI') { bank += total; br('Service collection', total, (s.desc || '') + ' \u00B7 ' + s.date); }
+      else credit += total;
+    });
+
+    (appData.expenseLog || []).filter(function (e) { return String(e.date || '').substring(0, 7) === mk; }).forEach(function (e) {
+      var amt = num(e.amount);
+      if (e.payMode === 'Cash Drawer') { cash -= amt; cr('Expense \u00B7 ' + (e.category || ''), -amt, (e.desc || '') + ' \u00B7 ' + e.date); }
+      else if (e.payMode === 'Bank/UPI') { bank -= amt; br('Expense \u00B7 ' + (e.category || ''), -amt, (e.desc || '') + ' \u00B7 ' + e.date); }
+    });
+
+    (appData.transferLog || []).filter(function (t) { return String(t.date || '').substring(0, 7) === mk; }).forEach(function (t) {
+      var amt = num(t.amount);
+      if (t.direction === 'CashToBank') {
+        cash -= amt; bank += amt;
+        cr('Transferred to Bank/UPI', -amt, t.date); br('Received from Cash Drawer', amt, t.date);
+      } else if (t.direction === 'BankToCash') {
+        bank -= amt; cash += amt;
+        br('Transferred to Cash Drawer', -amt, t.date); cr('Received from Bank/UPI', amt, t.date);
+      }
+    });
+
+    (appData.adminTransfers || []).filter(function (at) { return String(at.date || '').substring(0, 7) === mk; }).forEach(function (at) {
+      var amt = num(at.amount), src = at.source || 'Bank/UPI';
+      if (at.type === 'TransferToAdmin') {
+        if (src === 'Cash Drawer') { cash -= amt; cr('Transferred to Admin', -amt, at.date); }
+        else { bank -= amt; br('Transferred to Admin', -amt, at.date); }
+      } else if (at.type === 'ReceivedFromAdmin') {
+        bank += amt; br('Received from Admin', amt, at.date);
+      }
+    });
+
+    return { cash: cash, bank: bank, credit: credit, cashRows: cashRows, bankRows: bankRows, opening: op };
+  }
+
+  /* ---------------------------------------------------------------- salaries */
+  function salaryRows(mk) {
+    var store = (appData.monthlySalaries || {})[mk] || {};
+    return (appData.users || []).filter(function (u) { return u.role === 'Staff'; }).map(function (u) {
+      var cfg = store[u.name] || {};
+      var basic = num(cfg.basic);
+      var incPct = cfg.incentivePct === undefined ? 0 : num(cfg.incentivePct);
+      var collection = 0;
+      entriesOf(mk).forEach(function (s) { if (s.staff === u.name) collection += num(s.serviceCharge); });
+      var incentive = collection > basic ? (incPct / 100) * (collection - basic) : 0;
+      var adj = { adjustment: 0, reason: '' };
+      try { adj = getStaffAttendanceAdjustment(u.name, mk, basic + incentive) || adj; } catch (e) { }
+      var attAdj = Math.max(0, num(adj.adjustment));
+      return {
+        name: u.name, basic: basic, incPct: incPct, collection: collection,
+        incentive: incentive, attAdj: attAdj, reason: adj.reason || '',
+        total: Math.max(0, basic + incentive - attAdj),
+        finalized: !!cfg.finalized, finalizedAmount: num(cfg.finalizedAmount)
+      };
+    });
+  }
+
+  function finalizeSalary(mk, name) {
+    var row = null;
+    salaryRows(mk).forEach(function (r) { if (r.name === name) row = r; });
+    if (!row) return false;
+    if (!appData.monthlySalaries[mk]) appData.monthlySalaries[mk] = {};
+    appData.monthlySalaries[mk][name] = {
+      basic: row.basic, incentivePct: row.incPct, attAdjustment: row.attAdj,
+      finalized: true, finalizedAmount: row.total
+    };
+    var existing = (appData.expenseLog || []).filter(function (e) {
+      return String(e.date || '').substring(0, 7) === mk && e.category === 'Salary / Salary Advance' && e.isSalaryFinalization && e.salaryStaff === name;
+    })[0];
+    if (existing) {
+      existing.amount = row.total;
+      existing.desc = 'Salary - ' + name + ' (' + mk + ')';
+    } else {
+      appData.expenseLog.unshift({
+        id: 'EXP_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8),
+        date: getISTDateStr(), time: getISTTimeStr(), timestamp: Date.now(),
+        category: 'Salary / Salary Advance',
+        desc: 'Salary - ' + name + ' (' + mk + ')',
+        amount: row.total, payMode: 'Bank/UPI',
+        staff: currentUser ? currentUser.name : 'Admin',
+        isSalaryFinalization: true, salaryStaff: name
+      });
+    }
+    return true;
+  }
+
+  /* ==================================================================
+     PART 2 — receivable settlement on the original service entry
+     ================================================================== */
+  var settleCtx = { id: null, wizard: false };
+
+  function applySettlement(id, cashIn, bankIn, remarks) {
+    var s = (appData.serviceLog || []).filter(function (x) { return x.id === id; })[0];
+    if (!s) { alert('That service entry could not be found.'); return false; }
+    var due = receivableDue(s);
+    if (due <= 0.004) { alert('This entry has no outstanding receivable.'); return false; }
+
+    var cash = Math.max(0, Math.min(num(cashIn), due));
+    var bank = Math.max(0, Math.min(num(bankIn), due - cash));
+    var paid = Math.round((cash + bank) * 100) / 100;
+    if (paid <= 0) { alert('Enter the amount being settled.'); return false; }
+    var remaining = Math.round((due - paid) * 100) / 100;
+
+    if (!s.originalPayMode) s.originalPayMode = s.payMode;
+    var split = (s.isSplit || s.payMode === 'Split Payment');
+    var newCash = (split ? num(s.splitCash) : 0) + cash;
+    var newBank = (split ? num(s.splitBank) : 0) + bank;
+
+    if (!s.settlements) s.settlements = [];
+    s.settlements.push({
+      id: 'STL_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8),
+      date: getISTDateStr(), time: getISTTimeStr(), timestamp: Date.now(),
+      cash: cash, bank: bank, total: paid,
+      mode: cash > 0 && bank > 0 ? 'Split' : (cash > 0 ? 'Cash Drawer' : 'Bank/UPI'),
+      remarks: String(remarks || '').trim(),
+      by: currentUser ? currentUser.name : 'Admin',
+      byRole: currentUser ? currentUser.role : 'Admin'
+    });
+
+    if (remaining <= 0.004) {
+      s.splitReceivable = 0;
+      if (newCash > 0 && newBank > 0) {
+        s.isSplit = true; s.payMode = 'Split Payment'; s.splitCash = newCash; s.splitBank = newBank;
+      } else if (newCash > 0) {
+        s.isSplit = false; s.payMode = 'Cash Drawer'; s.splitCash = 0; s.splitBank = 0;
+      } else {
+        s.isSplit = false; s.payMode = 'Bank/UPI'; s.splitCash = 0; s.splitBank = 0;
+      }
+      s.settled = true;
+      s.settledDate = getISTDateStr();
+      s.settledTime = getISTTimeStr();
+      s.settledMode = s.settlements[s.settlements.length - 1].mode;
+    } else {
+      s.isSplit = true; s.payMode = 'Split Payment';
+      s.splitCash = newCash; s.splitBank = newBank; s.splitReceivable = remaining;
+    }
+    s.settledBy = currentUser ? currentUser.name : 'Admin';
+    return true;
+  }
+
+  function settleCore(id, cashIn, bankIn, remarks) {
+    if (staffMobileBlocked()) { alert('Mobile View-Only Mode: settling a receivable is disabled on this device.'); return false; }
+    var s = (appData.serviceLog || []).filter(function (x) { return x.id === id; })[0];
+    if (s && isClosedMonth(String(s.date || '').substring(0, 7))) {
+      alert('This entry belongs to a CLOSED month and can no longer be settled.');
+      return false;
+    }
+    if (!applySettlement(id, cashIn, bankIn, remarks)) return false;
+    saveData();
+    refreshAllViews();
+    return true;
+  }
+
+  window.ftcReceivableDue = receivableDue;
+  window.ftcHistoryText = historyText;
+  window.ftcSettleDirect = settleCore;
+
+  window.ftcOpenSettle = function (id, fromWizard) {
+    var s = (appData.serviceLog || []).filter(function (x) { return x.id === id; })[0];
+    if (!s) return;
+    settleCtx.id = id;
+    settleCtx.wizard = !!fromWizard;
+    var due = receivableDue(s);
+    document.getElementById('ftcSettleDue').innerHTML =
+      '<div><strong>' + esc(s.desc || 'Service') + '</strong> \u00B7 ' + esc(s.date) + '</div>' +
+      '<div>Customer: ' + esc(s.receivablePersonName || '\u2014') + '</div>' +
+      '<div>Outstanding receivable: <strong>' + money(due) + '</strong></div>';
+    document.getElementById('ftcSettleMode').value = 'Cash Drawer';
+    document.getElementById('ftcSettleCash').value = due.toFixed(2);
+    document.getElementById('ftcSettleBank').value = '0';
+    document.getElementById('ftcSettleRemarks').value = '';
+    ftcSettleSyncMode();
+    document.getElementById('ftcSettleModal').style.display = 'flex';
+  };
+
+  window.ftcCloseSettle = function () {
+    document.getElementById('ftcSettleModal').style.display = 'none';
+    settleCtx.id = null;
+  };
+
+  window.ftcSettleSyncMode = function () {
+    var mode = document.getElementById('ftcSettleMode').value;
+    var cashEl = document.getElementById('ftcSettleCash');
+    var bankEl = document.getElementById('ftcSettleBank');
+    cashEl.parentElement.style.display = (mode === 'Bank/UPI') ? 'none' : 'block';
+    bankEl.parentElement.style.display = (mode === 'Cash Drawer') ? 'none' : 'block';
+    if (mode !== 'Split') {
+      var s = (appData.serviceLog || []).filter(function (x) { return x.id === settleCtx.id; })[0];
+      var due = receivableDue(s);
+      if (mode === 'Cash Drawer') { cashEl.value = due.toFixed(2); bankEl.value = '0'; }
+      else { bankEl.value = due.toFixed(2); cashEl.value = '0'; }
+    }
+  };
+
+  window.ftcConfirmSettle = function () {
+    if (!settleCtx.id) return;
+    var mode = document.getElementById('ftcSettleMode').value;
+    var cash = mode === 'Bank/UPI' ? 0 : num(document.getElementById('ftcSettleCash').value);
+    var bank = mode === 'Cash Drawer' ? 0 : num(document.getElementById('ftcSettleBank').value);
+    var remarks = document.getElementById('ftcSettleRemarks').value;
+    var ok = settleCore(settleCtx.id, cash, bank, remarks);
+    if (ok) {
+      var wasWizard = settleCtx.wizard;
+      window.ftcCloseSettle();
+      if (wasWizard) { try { renderWizard(); } catch (e) { } }
+      alert('Receivable settled successfully.');
+    }
+  };
+
+  /* ==================================================================
+     PART 3 / 4 — closing gate and staff greeting
+     ================================================================== */
+  var greetingAttempted = false;
+
+  function gateEl() {
+    var el = document.getElementById('ftcGate');
+    if (!el) { el = document.createElement('div'); el.id = 'ftcGate'; document.body.appendChild(el); }
+    return el;
+  }
+
+  function adminGateHTML(mk) {
+    return '<div class="ftc-gate-card">' +
+      '<h2><i class="fa-solid fa-lock"></i> Monthly closing is required</h2>' +
+      '<div class="ftc-gate-month">' + esc(monthLabel(mk)) + '</div>' +
+      '<p style="font-size:.87rem;line-height:1.65;color:#334155;margin:0 0 10px;">The last calendar day of ' + esc(monthLabel(mk)) + ' has ended. The month must be closed before the business can continue.</p>' +
+      '<ul>' +
+      '<li>Review the service collections and settle every outstanding receivable.</li>' +
+      '<li>Verify the Cash Drawer and Bank/UPI balances.</li>' +
+      '<li>Verify and finalise the staff salary calculations.</li>' +
+      '<li>Lock the month and transfer the closing balances.</li>' +
+      '</ul>' +
+      '<p style="font-size:.82rem;line-height:1.6;color:#64748B;margin:0 0 18px;">Reports, payments, staff and settings stay unavailable until the closing is complete. The closing can be interrupted and resumed; no record is changed until the final confirmation.</p>' +
+      '<div class="ftc-gate-actions">' +
+      '<button class="btn-primary" style="background:var(--atmos-red);" onclick="ftcStartClosing()"><i class="fa-solid fa-play"></i> Proceed to monthly closing</button>' +
+      '<button class="btn-secondary" onclick="ftcGateLogout()"><i class="fa-solid fa-power-off"></i> Sign out</button>' +
+      '</div></div>';
+  }
+
+  function staffGateHTML(mk) {
+    return '<div class="ftc-gate-card staff">' +
+      '<h2><i class="fa-solid fa-hourglass-half"></i> Monthly closing in progress</h2>' +
+      '<div class="ftc-gate-month">' + esc(monthLabel(mk)) + '</div>' +
+      '<p style="font-size:.87rem;line-height:1.7;color:#334155;margin:0 0 18px;">The business administrator is closing ' + esc(monthLabel(mk)) + '. Service entries, expenses, transfers, invoices, salary figures and settings are unavailable to staff until the closing is complete. Please try again shortly, or ask the administrator.</p>' +
+      '<div class="ftc-gate-actions"><button class="btn-secondary" onclick="ftcGateLogout()"><i class="fa-solid fa-power-off"></i> Sign out</button></div>' +
+      '</div>';
+  }
+
+  function hideGate() {
+    var el = gateEl();
+    if (el.style.display !== 'none') {
+      el.style.display = 'none'; el.innerHTML = ''; el.className = '';
+      document.body.style.overflow = '';
+    }
+  }
+
+  function relaxBannerHTML(mk) {
+    var admin = isAdminUser();
+    return '<div class="ftc-relax-bar">' +
+      '<div class="ftc-relax-text">' +
+      '<strong><i class="fa-solid fa-circle-info"></i> ' + esc(monthLabel(mk)) + ' is waiting to be closed</strong>' +
+      '<span>' + (admin
+        ? 'There is no deadline for this one - it waits until you close it. Only ' + esc(monthLabel(mk)) + ' records are locked; the new month and today\'s work stay exactly as they are.'
+        : 'You can keep entering today\'s work normally. The administrator will close ' + esc(monthLabel(mk)) + '.') +
+      '</span></div>' +
+      (admin ? '<button class="btn-primary" style="width:auto;background:var(--atmos-red);" onclick="ftcStartClosing()"><i class="fa-solid fa-play"></i> Close ' + esc(monthLabel(mk)) + ' now</button>' : '') +
+      '<button class="ftc-relax-x" onclick="ftcHideRelax()" title="Hide"><i class="fa-solid fa-xmark"></i></button>' +
+      '</div>';
+  }
+
+  window.ftcHideRelax = function () {
+    relaxHidden = true;
+    hideGate();
+  };
+
+  function renderGate() {
+    var el = gateEl();
+    if (!currentUser || isPlatformAdmin()) { hideGate(); return; }
+    var pending = pendingCloseMonth();
+    if (!pending) { hideGate(); maybeGreeting(); return; }
+
+    if (closingRelaxed(pending)) {
+      if (relaxHidden) { hideGate(); return; }
+      var relaxKey = 'relax:' + pending;
+      if (el.dataset.month === relaxKey && el.style.display === 'flex') return;
+      el.dataset.month = relaxKey;
+      el.className = 'relax';
+      el.innerHTML = relaxBannerHTML(pending);
+      el.style.display = 'flex';
+      document.body.style.overflow = '';
+      return;
+    }
+
+    if (el.dataset.month === pending && el.style.display === 'flex') return;
+    el.dataset.month = pending;
+    el.className = '';
+    el.innerHTML = isAdminUser() ? adminGateHTML(pending) : staffGateHTML(pending);
+    el.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+  }
+
+  window.ftcGateLogout = function () { try { appLogout(); } catch (e) { location.reload(); } };
+
+  window.ftcStartClosing = function () {
+    var mk = pendingCloseMonth();
+    if (!mk) { renderGate(); return; }
+    openWizard(mk);
+  };
+
+  function maybeGreeting() {
+    if (greetingAttempted) return;
+    if (!currentUser || currentUser.role !== 'Staff') return;
+    greetingAttempted = true;
+    var mk = getISTMonthStr();
+    var key = 'ftcGreeting_' + (currentUser.name || '') + '_' + mk;
+    try { if (localStorage.getItem(key)) return; } catch (e) { }
+    var el = document.getElementById('ftcGreeting');
+    if (!el) return;
+    document.getElementById('ftcGreetingName').innerText = currentUser.name || 'Team';
+    document.getElementById('ftcGreetingMonth').innerText = monthLabel(mk);
+    el.style.display = 'flex';
+    try { localStorage.setItem(key, '1'); } catch (e) { }
+  }
+
+  window.ftcCloseGreeting = function () {
+    var el = document.getElementById('ftcGreeting');
+    if (el) el.style.display = 'none';
+  };
+
+  /* ==================================================================
+     PART 5 / 6 — month-end closing wizard
+     ================================================================== */
+  var wz = { month: null, step: 1 };
+  var STEP_TITLES = ['Service Terminal Overview', 'Receivable Settlement', 'Cash Drawer', 'Bank / UPI', 'Staff Salaries', 'Final Validation', 'Lock the Month', 'Closing Report'];
+
+  function openWizard(mk) {
+    wz.month = mk || pendingCloseMonth() || getISTMonthStr();
+    wz.step = isClosedMonth(wz.month) ? 8 : 1;
+    document.getElementById('ftcWizard').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    renderWizard();
+  }
+
+  window.ftcCloseWizard = function () {
+    document.getElementById('ftcWizard').style.display = 'none';
+    document.body.style.overflow = '';
+    renderGate();
+    refreshAllViews();
+  };
+
+  window.ftcOpenClosingWizard = function (mk) { openWizard(mk || pendingCloseMonth() || getISTMonthStr()); };
+
+  function tile(label, value, color) {
+    return '<div class="ftc-wz-tile"><span>' + esc(label) + '</span><strong' + (color ? ' style="color:' + color + '"' : '') + '>' + value + '</strong></div>';
+  }
+
+  function tableHTML(cols, rows, emptyText) {
+    var head = '<thead><tr>' + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr></thead>';
+    var body = rows.length ? rows.join('') : '<tr><td colspan="' + cols.length + '" style="text-align:center;color:#94a3b8;padding:18px;">' + esc(emptyText || 'No records.') + '</td></tr>';
+    return '<div class="ftc-wz-scroll"><table>' + head + '<tbody>' + body + '</tbody></table></div>';
+  }
+
+  function stepOverview() {
+    var mk = wz.month;
+    var list = entriesOf(mk);
+    var charges = 0, discount = 0, dept = 0, cash = 0, bank = 0, recv = 0;
+    list.forEach(function (s) {
+      charges += num(s.serviceCharge);
+      discount += num(s.discount);
+      dept += num(s.deptFee);
+      var t = num(s.total);
+      if (s.isSplit || s.payMode === 'Split Payment') { cash += num(s.splitCash); bank += num(s.splitBank); recv += num(s.splitReceivable); }
+      else if (s.payMode === 'Cash Drawer') cash += t;
+      else if (s.payMode === 'Bank/UPI') bank += t;
+      else recv += t;
+    });
+    var rows = list.slice().sort(function (a, b) { return entryDateTimeValue(b) - entryDateTimeValue(a); }).map(function (s) {
+      return '<tr>' +
+        '<td>' + esc(s.date) + '<br><span style="color:#94a3b8;font-size:.7rem;">' + esc(s.time || '') + '</span></td>' +
+        '<td>' + esc(s.desc || '') + (s.receivablePersonName ? '<br><span style="color:#7c3aed;font-size:.7rem;">' + esc(s.receivablePersonName) + '</span>' : '') + '</td>' +
+        '<td>' + money(s.serviceCharge) + '</td>' +
+        '<td>' + money(s.discount) + '</td>' +
+        '<td>' + money(s.deptFee) + '</td>' +
+        '<td><strong>' + money(s.total) + '</strong></td>' +
+        '<td>' + esc(s.isSplit || s.payMode === 'Split Payment' ? 'Split' : s.payMode) + '</td>' +
+        '<td>' + esc(s.staff || '\u2014') + '</td></tr>';
+    });
+    return '<div class="ftc-wz-panel">' +
+      '<h3>Stage 1 \u00B7 Service Terminal Overview</h3>' +
+      '<p class="ftc-wz-hint">Read-only review of every service recorded in ' + esc(monthLabel(mk)) + ', using the same figures as the Service Collections overview.</p>' +
+      '<div class="ftc-wz-grid">' +
+      tile('Interactions', String(list.length)) +
+      tile('Service charges', money(charges)) +
+      tile('Discounts', money(discount)) +
+      tile('Department fees', money(dept)) +
+      tile('Cash collected', money(cash), '#059669') +
+      tile('Bank / UPI collected', money(bank), '#2563eb') +
+      tile('Receivables raised', money(recv), '#7c3aed') +
+      tile('Net service income', money(charges - discount), '#059669') +
+      '</div>' +
+      tableHTML(['Date', 'Service', 'Charge', 'Discount', 'Dept fee', 'Total', 'Mode', 'Staff'], rows, 'No service entries were recorded in this month.') +
+      '</div>';
+  }
+
+  function stepReceivables() {
+    var mk = wz.month;
+    var list = openReceivables(mk);
+    var total = 0;
+    list.forEach(function (s) { total += receivableDue(s); });
+    var rows = list.map(function (s) {
+      var age = Math.max(0, Math.round((Date.parse(mk + '-01') - Date.parse(String(s.date).substring(0, 7) + '-01')) / 2592000000));
+      return '<tr>' +
+        '<td>' + esc(s.date) + '</td>' +
+        '<td>' + esc(s.desc || '') + '</td>' +
+        '<td>' + esc(s.receivablePersonName || '\u2014') + '</td>' +
+        '<td>' + esc(s.staff || '\u2014') + '</td>' +
+        '<td>' + (age > 0 ? age + ' month(s)' : 'This month') + '</td>' +
+        '<td><strong style="color:#7c3aed;">' + money(receivableDue(s)) + '</strong></td>' +
+        '<td><button class="btn-primary" style="width:auto;padding:5px 10px;font-size:.72rem;background:#7c3aed;" onclick="ftcOpenSettle(\'' + esc(s.id) + '\', true)">Settle</button></td>' +
+        '</tr>';
+    });
+    return '<div class="ftc-wz-panel">' +
+      '<h3>Stage 2 \u00B7 Receivable Settlement</h3>' +
+      '<p class="ftc-wz-hint">Every outstanding receivable must be settled against its original service entry before the closing can continue. Settling records the date, time, mode, amount and remarks on that same entry \u2014 no new service entry is created and the original amount is never changed.</p>' +
+      '<div class="ftc-wz-grid">' +
+      tile('Outstanding entries', String(list.length), list.length ? '#e11d48' : '#059669') +
+      tile('Outstanding amount', money(total), list.length ? '#e11d48' : '#059669') +
+      '</div>' +
+      tableHTML(['Entry date', 'Service', 'Customer', 'Recorded by', 'Age', 'Outstanding', 'Action'], rows, 'No receivable is outstanding. Every collection is complete.') +
+      '</div>';
+  }
+
+  function stepBook(which) {
+    var mk = wz.month;
+    var b = bookOf(mk);
+    var rows = (which === 'cash' ? b.cashRows : b.bankRows).map(function (r) {
+      return '<tr><td>' + esc(r.label) + (r.detail ? '<br><span style="color:#94a3b8;font-size:.7rem;">' + esc(r.detail) + '</span>' : '') + '</td>' +
+        '<td style="text-align:right;" class="' + (r.amount < 0 ? 'neg' : 'pos') + '">' + (r.amount < 0 ? '-' : '+') + money(Math.abs(r.amount)) + '</td></tr>';
+    });
+    var closing = which === 'cash' ? b.cash : b.bank;
+    var label = which === 'cash' ? 'Cash Drawer' : 'Bank / UPI';
+    return '<div class="ftc-wz-panel">' +
+      '<h3>Stage ' + (which === 'cash' ? '3' : '4') + ' \u00B7 ' + label + ' Verification</h3>' +
+      '<p class="ftc-wz-hint">Read-only verification of the ' + label + ' balance for ' + esc(monthLabel(mk)) + '. Every movement recorded in the month is listed exactly as the balance engine calculates it.</p>' +
+      '<div class="ftc-wz-grid">' +
+      tile('Opening balance', money(which === 'cash' ? b.opening.cash : b.opening.bank)) +
+      tile('Closing balance', money(closing), closing < 0 ? '#e11d48' : '#059669') +
+      tile('Movements', String(rows.length)) +
+      '</div>' +
+      (closing < 0 ? '<div class="ftc-check bad"><i class="fa-solid fa-triangle-exclamation"></i><div><b>A negative balance was detected</b>A ' + label + ' balance below zero usually means a collection, expense or transfer is missing for this month. Record it before closing.</div></div>' : '') +
+      tableHTML(['Movement', 'Amount'], rows, 'No movement was recorded in this month.') +
+      '</div>';
+  }
+
+  function stepSalaries() {
+    var mk = wz.month;
+    var data = salaryRows(mk);
+    var total = 0, pending = 0;
+    data.forEach(function (r) { total += r.finalized ? r.finalizedAmount : r.total; if (!r.finalized && r.total > 0) pending++; });
+    var rows = data.map(function (r) {
+      return '<tr>' +
+        '<td><strong>' + esc(r.name) + '</strong></td>' +
+        '<td>' + money(r.basic) + '</td>' +
+        '<td>' + r.incPct + '%</td>' +
+        '<td>' + money(r.collection) + '</td>' +
+        '<td>' + money(r.incentive) + '</td>' +
+        '<td class="neg">' + money(r.attAdj) + '</td>' +
+        '<td><strong>' + money(r.total) + '</strong></td>' +
+        '<td>' + (r.finalized ? '<span style="color:#059669;font-size:.72rem;font-weight:800;">Finalised</span>'
+          : '<button class="btn-primary" style="width:auto;padding:5px 10px;font-size:.72rem;" onclick="ftcWizardFinalizeSalary(\'' + esc(r.name).replace(/'/g, '') + '\')">Finalise</button>') + '</td>' +
+        '</tr>';
+    });
+    return '<div class="ftc-wz-panel">' +
+      '<h3>Stage 5 \u00B7 Staff Salary Verification</h3>' +
+      '<p class="ftc-wz-hint">Salary, incentive and attendance deductions are calculated exactly as in HR Management. Finalising an employee records the amount as a Salary / Salary Advance expense for the month. Every calculation must be finalised before the month can be locked.</p>' +
+      '<div class="ftc-wz-grid">' +
+      tile('Employees', String(data.length)) +
+      tile('Total payable', money(total)) +
+      tile('Awaiting finalisation', String(pending), pending ? '#e11d48' : '#059669') +
+      '</div>' +
+      tableHTML(['Employee', 'Basic', 'Incentive %', 'Collection', 'Incentive', 'Attendance', 'Payable', 'Status'], rows, 'No staff account exists yet.') +
+      '</div>';
+  }
+
+  window.ftcWizardFinalizeSalary = function (name) {
+    if (!confirm('Finalise the salary of ' + name + ' for ' + monthLabel(wz.month) + '?')) return;
+    finalizeSalary(wz.month, name);
+    saveData();
+    renderWizard();
+  };
+
+  function validationIssues(mk, asList) {
+    var issues = [], checks = [];
+
+    var recv = openReceivables(mk), recvTotal = 0;
+    recv.forEach(function (s) { recvTotal += receivableDue(s); });
+    checks.push({
+      ok: recv.length === 0, title: 'Receivable settlement', step: 2,
+      detail: recv.length === 0 ? 'Every receivable up to this month is settled.'
+        : recv.length + ' receivable(s) totalling ' + money(recvTotal) + ' are still outstanding.'
+    });
+    if (recv.length) issues.push('\u2022 ' + recv.length + ' receivable(s) totalling ' + money(recvTotal) + ' are still outstanding.');
+
+    var sal = salaryRows(mk).filter(function (r) { return r.total > 0 && !r.finalized; });
+    checks.push({
+      ok: sal.length === 0, title: 'Salary calculation', step: 5,
+      detail: sal.length === 0 ? 'All salary calculations are finalised.'
+        : 'Salary is not finalised for: ' + sal.map(function (r) { return r.name; }).join(', ') + '.'
+    });
+    if (sal.length) issues.push('\u2022 Salary is not finalised for ' + sal.map(function (r) { return r.name; }).join(', ') + '.');
+
+    var sent = 0, got = 0;
+    (appData.adminTransfers || []).forEach(function (at) {
+      if (String(at.date || '').substring(0, 7) !== mk) return;
+      if (at.type === 'TransferToAdmin') sent += num(at.amount);
+      else if (at.type === 'ReceivedFromAdmin') got += num(at.amount);
+    });
+    var adminNet = Math.round((sent - got) * 100) / 100;
+    checks.push({
+      ok: Math.abs(adminNet) <= 0.01, title: 'Admin fund transfer', step: 4,
+      detail: Math.abs(adminNet) <= 0.01 ? 'The admin fund transfer is balanced.' : 'Admin fund transfer net is ' + money(adminNet) + '. It must be settled to zero.'
+    });
+    if (Math.abs(adminNet) > 0.01) issues.push('\u2022 Admin fund transfer net is ' + money(adminNet) + ' and must be settled to zero.');
+
+    var b = bookOf(mk);
+    var negative = b.cash < -0.004 || b.bank < -0.004;
+    checks.push({
+      ok: !negative, title: 'Balance integrity', step: b.cash < -0.004 ? 3 : 4,
+      detail: negative ? 'A negative balance was detected (Cash ' + money(b.cash) + ', Bank ' + money(b.bank) + ').'
+        : 'Cash Drawer and Bank/UPI balances are consistent.'
+    });
+    if (negative) issues.push('\u2022 A negative Cash Drawer or Bank/UPI balance was detected.');
+
+    var prev = prevMonth(mk);
+    var prevHasData = (appData.serviceLog || []).some(function (s) { return String(s.date || '').substring(0, 7) === prev; }) ||
+      (appData.expenseLog || []).some(function (e) { return String(e.date || '').substring(0, 7) === prev; });
+    checks.push({
+      ok: !prevHasData || isClosedMonth(prev), title: 'Previous month', step: 1,
+      detail: (!prevHasData || isClosedMonth(prev)) ? 'The previous month is already closed.'
+        : monthLabel(prev) + ' is still open and must be closed first.'
+    });
+    if (prevHasData && !isClosedMonth(prev)) issues.push('\u2022 ' + monthLabel(prev) + ' must be closed before ' + monthLabel(mk) + '.');
+
+    return asList ? checks : issues;
+  }
+
+  function stepValidation() {
+    var checks = validationIssues(wz.month, true);
+    var bad = checks.filter(function (c) { return !c.ok; }).length;
+    var html = checks.map(function (c) {
+      return '<div class="ftc-check ' + (c.ok ? 'ok' : 'bad') + '">' +
+        '<i class="fa-solid ' + (c.ok ? 'fa-circle-check' : 'fa-circle-exclamation') + '" style="color:' + (c.ok ? '#059669' : '#e11d48') + ';"></i>' +
+        '<div><b>' + esc(c.title) + '</b>' + esc(c.detail) +
+        (c.ok ? '' : ' <button style="background:none;color:#2563eb;font-size:.72rem;font-weight:800;padding:0;text-decoration:underline;" onclick="ftcGotoStep(' + c.step + ')">Open stage ' + c.step + '</button>') +
+        '</div></div>';
+    }).join('');
+    return '<div class="ftc-wz-panel">' +
+      '<h3>Stage 6 \u00B7 Final Validation</h3>' +
+      '<p class="ftc-wz-hint">The system verifies its own records. Nothing is taken on trust: a single failed check blocks the closing.</p>' +
+      '<div class="ftc-wz-grid">' +
+      tile('Checks passed', String(checks.length - bad), bad ? '#0b1e2d' : '#059669') +
+      tile('Checks failed', String(bad), bad ? '#e11d48' : '#059669') +
+      '</div>' + html + '</div>';
+  }
+
+  window.ftcGotoStep = function (n) { wz.step = n; renderWizard(); };
+
+  function stepLock() {
+    var mk = wz.month;
+    var b = bookOf(mk);
+    var recs = openReceivables(mk).length;
+    var salPending = salaryRows(mk).filter(function (r) { return r.total > 0 && !r.finalized; }).length;
+    var ready = !recs && !salPending;
+    return '<div class="ftc-wz-panel">' +
+      '<h3>Stage 7 \u00B7 Lock ' + esc(monthLabel(mk)) + '</h3>' +
+      '<p class="ftc-wz-hint">Closing the month locks every record of ' + esc(monthLabel(mk)) + '. No service entry, expense, transfer, invoice, salary figure or settlement can be added, edited or deleted afterwards. Cash Drawer and Bank/UPI balances are transferred to the administrator and reset to zero; receivables remain on record.</p>' +
+      '<div class="ftc-wz-grid">' +
+      tile('Cash Drawer to transfer', money(b.cash)) +
+      tile('Bank / UPI to transfer', money(b.bank)) +
+      tile('Receivables remaining', money(b.credit), recs ? '#7c3aed' : '#059669') +
+      '</div>' +
+      '<div class="ftc-check ' + (ready ? 'ok' : 'bad') + '">' +
+      '<i class="fa-solid fa-triangle-exclamation" style="color:' + (ready ? '#059669' : '#e11d48') + ';"></i>' +
+      '<div><b>' + (ready ? 'Everything is ready' : 'The closing cannot continue yet') + '</b>' +
+      (ready ? 'Press Close ' + esc(monthLabel(mk)) + ' to lock the month. A closing record is written and the closing report stays available.'
+        : 'Return to stage 2 for the outstanding receivables or stage 5 for the pending salary calculations.') +
+      '</div></div></div>';
+  }
+
+  function reportHTML(mk, rec) {
+    var t = rec.totals || {};
+    function row(label, value) {
+      return '<tr><td style="padding:7px 10px;border-top:1px solid #eef2f7;">' + esc(label) + '</td>' +
+        '<td style="padding:7px 10px;border-top:1px solid #eef2f7;text-align:right;font-weight:800;">' + value + '</td></tr>';
+    }
+    var staffRows = (rec.salaries || []).map(function (s) {
+      return '<tr><td style="padding:6px 10px;border-top:1px solid #eef2f7;">' + esc(s.name) + '</td>' +
+        '<td style="padding:6px 10px;border-top:1px solid #eef2f7;text-align:right;">' + money(s.finalizedAmount || s.total) + '</td></tr>';
+    }).join('');
+    return '<div style="border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fff;">' +
+      '<div style="background:#0b1e2d;color:#fff;padding:14px 16px;">' +
+      '<div style="font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;opacity:.75;">Monthly Closing Report</div>' +
+      '<div style="font-size:1.05rem;font-weight:900;">' + esc(monthLabel(mk)) + '</div></div>' +
+      '<div style="padding:14px 16px;font-size:.8rem;line-height:1.7;color:#334155;">' +
+      '<div><strong>Closing type:</strong> ' + esc(rec.closingType || 'Manual Month-End Closing') + '</div>' +
+      '<div><strong>Closed by:</strong> ' + esc(rec.closedBy || '\u2014') + ' (' + esc(rec.closedRole || 'Admin') + ')</div>' +
+      '<div><strong>Closed on:</strong> ' + esc(rec.closedDate || '') + ' at ' + esc(rec.closedTime || '') + ' IST</div></div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:.8rem;">' +
+      row('Service interactions', String(t.interactions || 0)) +
+      row('Service charges collected', money(t.charges)) +
+      row('Net service income', money(t.net)) +
+      row('Department fees transacted', money(t.deptFees)) +
+      row('Receivables raised', money(t.receivablesRaised)) +
+      row('Receivables settled', money(t.receivablesSettled)) +
+      row('Receivables still outstanding', money(t.receivablesOutstanding)) +
+      row('Cash Drawer at closing', money(t.cashClosing)) +
+      row('Bank / UPI at closing', money(t.bankClosing)) +
+      row('Expenses recorded', money(t.expenses)) +
+      row('Salary finalised', money(t.salary)) +
+      row('Transferred to administrator', money(t.transferred)) +
+      '</table>' +
+      (staffRows ? '<div style="padding:12px 16px 4px;font-size:.72rem;font-weight:800;text-transform:uppercase;color:#64748b;">Staff salaries</div><table style="width:100%;border-collapse:collapse;font-size:.8rem;">' + staffRows + '</table>' : '') +
+      (rec.remarks ? '<div style="padding:12px 16px;font-size:.8rem;color:#334155;"><strong>Remarks:</strong> ' + esc(rec.remarks) + '</div>' : '') +
+      '</div>';
+  }
+
+  function stepReport() {
+    var mk = wz.month;
+    var rec = closingRecord(mk);
+    if (!rec) {
+      return '<div class="ftc-wz-panel"><h3>Stage 8 \u00B7 Closing Report</h3>' +
+        '<p class="ftc-wz-hint">No closing record exists for ' + esc(monthLabel(mk)) + ' yet. Complete stages 1 to 7 to create it.</p></div>';
+    }
+    return '<div class="ftc-wz-panel">' +
+      '<h3>Stage 8 \u00B7 Closing Report \u00B7 ' + esc(monthLabel(mk)) + '</h3>' +
+      '<p class="ftc-wz-hint">This report is stored with the closing record and remains available for future reference.</p>' +
+      reportHTML(mk, rec) +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;">' +
+      '<button class="btn-primary" style="width:auto;" onclick="ftcPrintReport()"><i class="fa-solid fa-print"></i> Print / Save as PDF</button>' +
+      '</div></div>';
+  }
+
+  window.ftcPrintReport = function () {
+    var rec = closingRecord(wz.month);
+    if (!rec) return alert('No closing record exists for this month.');
+    var w = window.open('', '_blank');
+    if (!w) return alert('Please allow pop-ups to print the closing report.');
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Closing Report ' + esc(monthLabel(wz.month)) + '</title>' +
+      '<style>body{font-family:Arial,Helvetica,sans-serif;padding:24px;color:#0b1e2d;}</style></head><body>' +
+      reportHTML(wz.month, rec) + '</body></html>');
+    w.document.close();
+    w.focus();
+    setTimeout(function () { try { w.print(); } catch (e) { } }, 350);
+  };
+
+  function stepBlocker(step) {
+    var mk = wz.month;
+    if (step === 2) {
+      var recv = openReceivables(mk);
+      if (recv.length) {
+        var total = 0;
+        recv.forEach(function (s) { total += receivableDue(s); });
+        return recv.length + ' receivable(s) totalling ' + money(total) + ' must be settled first.';
+      }
+    }
+    if (step === 5) {
+      var pend = salaryRows(mk).filter(function (r) { return r.total > 0 && !r.finalized; });
+      if (pend.length) return 'Finalise the salary of ' + pend.map(function (r) { return r.name; }).join(', ') + ' first.';
+    }
+    if (step === 6 || step === 7) {
+      if (validationIssues(mk).length) return 'Resolve the failed checks before continuing.';
+    }
+    return '';
+  }
+
+  function renderWizard() {
+    var mk = wz.month;
+    document.getElementById('ftcWzTitle').innerText = 'Monthly Closing \u00B7 ' + monthLabel(mk);
+    document.getElementById('ftcWzSub').innerText = isClosedMonth(mk)
+      ? 'Closed ' + ((closingRecord(mk) || {}).closedDate || '')
+      : 'Stage ' + wz.step + ' of 8';
+
+    document.getElementById('ftcWzRail').innerHTML = STEP_TITLES.map(function (t, i) {
+      var n = i + 1;
+      var cls = n === wz.step ? 'current' : (n < wz.step ? 'done' : '');
+      return '<div class="ftc-wz-dot ' + cls + '">' + n + '. ' + esc(t) + '</div>';
+    }).join('');
+
+    var body;
+    if (wz.step === 1) body = stepOverview();
+    else if (wz.step === 2) body = stepReceivables();
+    else if (wz.step === 3) body = stepBook('cash');
+    else if (wz.step === 4) body = stepBook('bank');
+    else if (wz.step === 5) body = stepSalaries();
+    else if (wz.step === 6) body = stepValidation();
+    else if (wz.step === 7) body = stepLock();
+    else body = stepReport();
+    document.getElementById('ftcWzBody').innerHTML = body;
+
+    var foot = document.getElementById('ftcWzFoot');
+    if (isClosedMonth(mk) && wz.step === 8) {
+      foot.innerHTML = '<span class="ftc-wz-status" style="color:#059669;"><i class="fa-solid fa-lock"></i> ' + esc(monthLabel(mk)) + ' is closed and locked.</span>' +
+        '<button class="btn-secondary" style="width:auto;" onclick="ftcCloseWizard()">Close</button>';
+      return;
+    }
+    var blocker = stepBlocker(wz.step);
+    var nextLabel = wz.step === 7 ? 'Close ' + monthLabel(mk) : 'Continue';
+    foot.innerHTML =
+      (blocker ? '<span class="ftc-wz-status"><i class="fa-solid fa-circle-exclamation"></i> ' + esc(blocker) + '</span>' : '<span class="ftc-wz-status"></span>') +
+      '<button class="btn-secondary" style="width:auto;" onclick="ftcPrevStep()"' + (wz.step === 1 ? ' disabled' : '') + '><i class="fa-solid fa-arrow-left"></i> Back</button>' +
+      '<button class="btn-primary" style="width:auto;' + (wz.step === 7 ? 'background:var(--atmos-red);' : '') + '" onclick="ftcNextStep()">' +
+      esc(nextLabel) + ' <i class="fa-solid fa-arrow-right"></i></button>';
+  }
+
+  window.ftcNextStep = function () {
+    var blocker = stepBlocker(wz.step);
+    if (blocker) { alert(blocker); return; }
+    if (wz.step === 7) { finaliseClose(); return; }
+    if (wz.step < 8) { wz.step += 1; renderWizard(); }
+  };
+
+  window.ftcPrevStep = function () { if (wz.step > 1) { wz.step -= 1; renderWizard(); } };
+
+  function finaliseClose() {
+    var mk = wz.month;
+    if (isClosedMonth(mk)) { alert('This month is already closed.'); return; }
+    var issues = validationIssues(mk);
+    if (issues.length) { alert('The month cannot be closed:\n\n' + issues.join('\n')); return; }
+    if (!confirm('Close ' + monthLabel(mk) + ' now?\n\nEvery record of this month will be locked. Cash Drawer and Bank/UPI balances are transferred to the administrator and reset to zero; outstanding receivables stay on record.')) return;
+
+    var backup = null;
+    try {
+      backup = JSON.stringify(appData);
+      var bal = getOperatingBalances(mk);
+      var t = {
+        interactions: entriesOf(mk).length,
+        charges: 0, net: 0, deptFees: 0, receivablesRaised: 0, receivablesSettled: 0,
+        receivablesOutstanding: bal.credit, cashClosing: bal.cash, bankClosing: bal.bank,
+        expenses: 0, salary: 0, transferred: bal.cash + bal.bank
+      };
+      entriesOf(mk).forEach(function (s) {
+        t.charges += num(s.serviceCharge);
+        t.net += num(s.serviceCharge) - num(s.discount);
+        t.deptFees += num(s.deptFee);
+        if (receivableDue(s) > 0) t.receivablesRaised += receivableDue(s);
+        (s.settlements || []).forEach(function (x) { t.receivablesSettled += num(x.total); });
+      });
+      (appData.expenseLog || []).forEach(function (e) {
+        if (String(e.date || '').substring(0, 7) !== mk) return;
+        t.expenses += num(e.amount);
+        if (e.category === 'Salary / Salary Advance') t.salary += num(e.amount);
+      });
+
+      /* The closed month keeps its own opening balances, so its history is
+         never rewritten. The cash and bank balances are transferred to the
+         administrator, so the FOLLOWING month opens at zero and only the
+         outstanding receivables carry forward. Entries of the new month, and
+         of every other month, are not touched. */
+      var nextMk = nextMonth(mk);
+      if (!appData.openingBalances[nextMk]) appData.openingBalances[nextMk] = { cash: 0, bank: 0, credit: 0 };
+      appData.openingBalances[nextMk].cash = 0;
+      appData.openingBalances[nextMk].bank = 0;
+      appData.openingBalances[nextMk].credit = bal.credit;
+
+      appData.closedMonths[mk] = {
+        closed: true, month: mk, monthLabel: monthLabel(mk),
+        closingType: 'Manual Month-End Closing',
+        closedAt: Date.now(), closedDate: getISTDateStr(), closedTime: getISTTimeStr(),
+        closedBy: currentUser ? currentUser.name : 'Admin',
+        closedRole: currentUser ? currentUser.role : 'Admin',
+        totals: t,
+        salaries: salaryRows(mk).map(function (r) {
+          return { name: r.name, basic: r.basic, incentive: r.incentive, attAdj: r.attAdj, total: r.total, finalizedAmount: r.finalized ? r.finalizedAmount : r.total };
+        }),
+        remarks: ''
+      };
+
+      if (saveData() === false) throw new Error('The closing could not be saved on this device.');
+
+      wz.step = 8;
+      renderWizard();
+      alert('Month ' + monthLabel(mk) + ' has been closed and locked successfully.');
+    } catch (err) {
+      if (backup) { try { appData = JSON.parse(backup); } catch (e) { } }
+      alert('The month could not be closed: ' + (err && err.message ? err.message : 'unexpected error') + '\n\nNo change was saved. The closing can be resumed from stage 1.');
+      wz.step = 1;
+      renderWizard();
+    }
+  }
+
+  window.ftcFinaliseClose = finaliseClose;
+
+  /* ==================================================================
+     PART 7 / 9 — list scrolling and centred summary tiles
+     ================================================================== */
+  function enhanceLists() {
+    var tables = document.querySelectorAll('.tab-content table');
+    for (var i = 0; i < tables.length; i++) {
+      var p = tables[i].parentElement;
+      if (p && !p.classList.contains('ft-list') && !(p.closest && p.closest('#ftcWizard'))) p.classList.add('ft-list');
+    }
+  }
+
+  function centerTiles() {
+    var nodes = document.querySelectorAll('.tab-content span, .tab-content div');
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!el.getAttribute) continue;
+      var st = el.getAttribute('style') || '';
+      if (st.indexOf('uppercase') === -1) continue;
+      var p = el.parentElement;
+      if (!p || !p.closest) continue;
+      if (p.closest('table') || p.closest('#ftcWizard') || p.closest('.tab-btn')) continue;
+      if (p.children.length > 3) continue;
+      p.classList.add('ftc-kpi');
+    }
+  }
+
+  /* The month-closing button in Administration now opens the mandatory flow
+     instead of closing the month in one click. Reopening still works. */
+  try {
+    var _ftcOriginalToggle = window.toggleMonthClosing;
+    if (typeof _ftcOriginalToggle === 'function') {
+      window.toggleMonthClosing = function () {
+        var el = document.getElementById('monthClosingPicker');
+        var mk = (el && el.value) || getISTMonthStr();
+        if (!isClosedMonth(mk)) { openWizard(mk); return; }
+        return _ftcOriginalToggle.apply(this, arguments);
+      };
+    }
+  } catch (e) { }
+
+  window.ftClosingTick = function () {
+    try { renderGate(); } catch (e) { }
+    try { enhanceLists(); } catch (e) { }
+    try { centerTiles(); } catch (e) { }
+  };
+
+  setInterval(function () { try { renderGate(); } catch (e) { } }, 60000);
+  setTimeout(function () { try { renderGate(); } catch (e) { } }, 1200);
+})();
+</script>
+</body>
 </html>
