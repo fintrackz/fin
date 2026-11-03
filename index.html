@@ -18737,13 +18737,60 @@ window.ftRemoveStaffIndex = function (user) {
   try {
     var notifStyle = document.createElement('style');
     notifStyle.textContent =
-      '#ftNotifPopup{position:fixed !important;inset:0 !important;right:auto !important;bottom:auto !important;left:0 !important;top:0 !important;width:100% !important;height:100% !important;max-width:none !important;' +
-      'display:flex !important;align-items:center !important;justify-content:center !important;padding:18px !important;background:rgba(11,30,45,.45) !important;' +
-      'border:0 !important;border-radius:0 !important;box-shadow:none !important;}' +
-      '#ftNotifPopup>div{width:min(440px,100%) !important;max-height:min(82vh,560px) !important;overflow:auto !important;display:block !important;background:#fff !important;' +
-      'border:1px solid var(--border);border-top:4px solid var(--accent-amber);border-radius:14px !important;box-shadow:0 24px 60px rgba(11,30,45,.38) !important;padding:14px 16px !important;}';
+      /* The whole screen turns white behind a new notification, and the card
+         sits in the middle with its close control in the top-right corner. */
+      '#ftNotifBackdrop{position:fixed !important;inset:0 !important;z-index:2300 !important;background:#ffffff !important;display:flex !important;' +
+      'align-items:center !important;justify-content:center !important;padding:18px !important;}' +
+      '#ftNotifPopup{position:relative !important;inset:auto !important;right:auto !important;bottom:auto !important;width:min(440px,100%) !important;' +
+      'max-height:86vh !important;overflow:auto !important;background:#ffffff !important;cursor:pointer !important;}' +
+      '#ftNotifPopup>button[title="Close"]{position:absolute !important;top:6px !important;right:6px !important;width:30px !important;height:30px !important;' +
+      'border:none !important;background:transparent !important;font-size:1.05rem !important;line-height:1 !important;cursor:pointer !important;}' +
+      /* Numbers sit in the middle of their column; wording stays left aligned. */
+      '#paReportTable td:nth-child(3),#paReportTable td:nth-child(4),#paReportTable td:nth-child(5),' +
+      '#paReportTable td:nth-child(6),#paReportTable td:nth-child(7),' +
+      '#paReportTable th:nth-child(3),#paReportTable th:nth-child(4),#paReportTable th:nth-child(5),' +
+      '#paReportTable th:nth-child(6),#paReportTable th:nth-child(7),' +
+      '#paBusinessTableBody td:nth-child(7),#paBusinessTableBody td:nth-child(12)' +
+      '{text-align:center !important;}';
     document.head.appendChild(notifStyle);
   } catch (e) { }
+
+  /* A new notification covers the whole screen in white, so nothing behind it
+     can be scrolled, clicked or read until it is closed. */
+  var ftNotifBase = window.ftShowNotifPopup;
+  if (typeof ftNotifBase === 'function') {
+    window.ftShowNotifPopup = function (n) {
+      ftNotifBase.apply(this, arguments);
+      var card = document.getElementById('ftNotifPopup');
+      if (!card) return;
+      var backdrop = document.createElement('div');
+      backdrop.id = 'ftNotifBackdrop';
+      card.parentNode.insertBefore(backdrop, card);
+      backdrop.appendChild(card);
+      card.style.cssText = 'position:relative;width:min(440px,100%);max-height:86vh;overflow:auto;background:#fff;color:var(--text);' +
+        'border:1px solid var(--border);border-top:4px solid var(--accent-amber);border-radius:14px;' +
+        'box-shadow:0 24px 60px rgba(11,30,45,.38);padding:22px 20px 16px;cursor:pointer';
+      var close = card.querySelector('button[title="Close"]');
+      if (close) close.style.cssText = 'position:absolute;top:6px;right:6px;width:30px;height:30px;border:none;background:transparent;' +
+        'color:var(--text-muted);font-size:1.05rem;line-height:1;cursor:pointer';
+      try { document.body.style.overflow = 'hidden'; } catch (e) { }
+    };
+  }
+  function ftNotifRelease() {
+    var backdrop = document.getElementById('ftNotifBackdrop');
+    if (backdrop) backdrop.remove();
+    try { document.body.style.overflow = ''; } catch (e) { }
+  }
+  var ftCloseBase = window.ftCloseNotifPopup;
+  window.ftCloseNotifPopup = function () {
+    if (typeof ftCloseBase === 'function') ftCloseBase.apply(this, arguments);
+    ftNotifRelease();
+  };
+  var ftOpenBase = window.ftOpenNotifFromPopup;
+  window.ftOpenNotifFromPopup = function (id) {
+    ftNotifRelease();
+    if (typeof ftOpenBase === 'function') ftOpenBase.apply(this, arguments);
+  };
 
   /* ==================================================================
      2. ACCURATE FIGURES FOR EVERY BUSINESS
@@ -18872,7 +18919,23 @@ window.ftRemoveStaffIndex = function (user) {
           if (live.staff !== undefined && live.staff !== null) staff = Math.max(staff === null ? 0 : staff, num(live.staff));
         }
         var previous = store.dataUsage[id] || {};
-        store.dataUsage[id] = Object.assign({}, previous, counts || emptyCounts(), {
+        var record = (store.businesses || {})[id] || {};
+        var published = (record.stats && typeof record.stats === 'object') ? record.stats : null;
+        if (published) {
+          var pc = countsFromLive(published);
+          counts = counts ? mergeCounts(counts, pc) : pc;
+          if (num(published.kb) > 0) { kb = Math.max(kb, num(published.kb)); known = true; }
+          if (published.staff !== undefined && published.staff !== null) staff = Math.max(staff === null ? 0 : staff, num(published.staff));
+        }
+        if (!counts) {
+          /* Nothing was readable this time: the figures already known are kept
+             rather than replaced by a false zero. */
+          counts = tally({
+            services: num(previous.services), expenses: num(previous.expenses), transfers: num(previous.transfers),
+            adminTransfers: num(previous.adminTransfers), invoices: num(previous.invoices)
+          });
+        }
+        store.dataUsage[id] = Object.assign({}, previous, counts, {
           staff: staff === null ? null : staff,
           currentKB: known ? kb : num(previous.currentKB),
           measuredAt: Date.now()
@@ -18912,6 +18975,19 @@ window.ftRemoveStaffIndex = function (user) {
       counts.invoices = (appData.invoices || []).length;
       entries = counts.services + counts.expenses + counts.transfers + counts.adminTransfers + counts.invoices;
       staff = (appData.users || []).filter(function (u) { return u && String(u.role || '').toLowerCase() !== 'admin'; }).length;
+    }
+    /* The totals the business itself published into its own directory record
+       outrank anything guessed from the console side. */
+    var own = (b && b.stats && typeof b.stats === 'object') ? b.stats : null;
+    if (own) {
+      ['services', 'expenses', 'transfers', 'adminTransfers', 'invoices'].forEach(function (k) {
+        counts[k] = Math.max(num(counts[k]), num(own[k]));
+      });
+      var counted = counts.services + counts.expenses + counts.transfers + counts.adminTransfers + counts.invoices;
+      var published = (own.entries === undefined || own.entries === null) ? 0 : num(own.entries);
+      entries = Math.max(entries === null ? 0 : num(entries), published, counted);
+      if (num(own.kb) > 0) currentKB = Math.max(currentKB, num(own.kb));
+      if (own.staff !== undefined && own.staff !== null) staff = Math.max(num(staff), num(own.staff));
     }
     return {
       currentKB: currentKB, known: currentKB > 0.2, entries: entries, staff: staff,
@@ -19164,10 +19240,28 @@ window.ftRemoveStaffIndex = function (user) {
         stats: { services: s.services, expenses: s.expenses, transfers: s.transfers, adminTransfers: s.adminTransfers, invoices: s.invoices, entries: s.entries, staff: s.staff, kb: s.kb },
         staffCount: s.staff, statsAt: Date.now()
       }).catch(function () { });
+      /* The business's own record in the platform directory is the one place the
+         platform console always reads, so the verified totals are written there
+         too. Nothing else in the record is touched. */
+      firebase.database().ref('atmos_platform_admin/businesses/' + authBusinessId + '/stats').update({
+        services: s.services, expenses: s.expenses, transfers: s.transfers, adminTransfers: s.adminTransfers,
+        invoices: s.invoices, entries: s.entries, staff: s.staff, kb: s.kb, at: Date.now()
+      }).catch(function () { });
     } catch (e) { }
   };
-  setTimeout(function () { window.ftPublishLocalStats(); }, 6000);
-  setInterval(function () { window.ftPublishLocalStats(); }, 20000);
+  setTimeout(function () { window.ftPublishLocalStats(); }, 3000);
+  setInterval(function () { window.ftPublishLocalStats(); }, 15000);
+  /* A saved entry is reported at once, so the console never lags behind. */
+  try {
+    var ftBaseSaveData = window.saveData;
+    if (typeof ftBaseSaveData === 'function') {
+      window.saveData = function () {
+        var result = ftBaseSaveData.apply(this, arguments);
+        try { window.ftPublishLocalStats(); } catch (e) { }
+        return result;
+      };
+    }
+  } catch (e) { }
 
   /* ==================================================================
      6. A REMOVED STAFF MEMBER'S SIGN-IN IS WITHDRAWN AT ONCE
