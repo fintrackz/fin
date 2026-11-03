@@ -2869,7 +2869,7 @@ html, body { background-color: transparent !important; background-image: none !i
 <div class="grid-metrics" id="paReportMetrics"></div>
 <div style="overflow-x:auto;margin-top:16px">
 <table>
-<thead><tr><th>Business</th><th>Users</th><th>Staff</th><th>Services Logged</th><th>Expenses</th><th>Storage (KB)</th><th>Subscription</th><th>Last Activity</th></tr></thead>
+<thead><tr><th>Business</th><th>Users</th><th>Staff</th><th>Services Logged</th><th>Expenses</th><th>Storage</th><th>Subscription</th><th>Last Activity</th></tr></thead>
 <tbody id="paReportTable"></tbody>
 </table>
 </div>
@@ -10413,8 +10413,8 @@ function openBusinessProfile(bizId) {
   /* Data Usage Section */
   html += '<div class="app-card" style="border-left:5px solid var(--primary)"><h3 style="font-size:1rem;font-weight:800;margin-bottom:12px"><i class="fa-solid fa-database" style="color:var(--primary)"></i> Business Data Usage (IST)</h3>'+
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:14px">'+
-    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Current Storage</span><div style="font-size:1.3rem;font-weight:800;color:var(--primary);margin-top:4px">'+(usage.known?usage.currentKB.toFixed(1)+' KB':'Unavailable')+'</div></div>'+
-    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Cumulative Data Added</span><div style="font-size:1.3rem;font-weight:800;color:var(--accent-green);margin-top:4px">'+((usage.cumulativeKB||0).toFixed(1)+' KB')+'</div></div>'+
+    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Current Storage</span><div style="font-size:1.3rem;font-weight:800;color:var(--primary);margin-top:4px">'+(usage.known?ftFmtKB(usage.currentKB):'Unavailable')+'</div></div>'+
+    '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Cumulative Data Added</span><div style="font-size:1.3rem;font-weight:800;color:var(--accent-green);margin-top:4px">'+(ftFmtKB(usage.cumulativeKB||0))+'</div></div>'+
     '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Added Today (IST)</span><div style="font-size:1.3rem;font-weight:800;color:var(--accent-amber);margin-top:4px">'+((usage.todayKB||0).toFixed(1)+' KB')+'</div></div>'+
     '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Weekly Usage</span><div style="font-size:1.3rem;font-weight:800;color:var(--accent-purple);margin-top:4px">'+((usage.weeklyKB||0).toFixed(1)+' KB')+'</div></div>'+
     '<div style="background:white;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border)"><span style="font-size:.7rem;font-weight:800;color:var(--text-muted);text-transform:uppercase">Monthly Usage</span><div style="font-size:1.3rem;font-weight:800;color:var(--atmos-navy);margin-top:4px">'+((usage.monthlyKB||0).toFixed(1)+' KB')+'</div></div>'+
@@ -11074,13 +11074,13 @@ function exportPAReport() {
   var period = document.getElementById('paReportPeriod').value;
   var businesses = platformData.businesses || {};
   var rows = '<div style="padding:20px;background:white;color:#0f172a;font-family:Arial,sans-serif"><div style="display:flex;justify-content:space-between;border-bottom:2px solid #0B1E2D;padding-bottom:10px;margin-bottom:15px"><div><h1 style="font-size:18px;color:#0B1E2D;margin:0">FinTrack Business Platform Admin</h1><p style="font-size:11px;color:#EE2B2E;font-weight:bold;margin:2px 0 0 0">'+period.toUpperCase()+' REPORT</p></div><div style="text-align:right;font-size:10px;color:#64748b"><p style="margin:0">Generated: '+getISTDateTimeStr()+'</p></div></div>';
-  rows += '<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:#f1f5f9"><th style="padding:6px;border:1px solid #cbd5e1">Business</th><th style="padding:6px;border:1px solid #cbd5e1">Users</th><th style="padding:6px;border:1px solid #cbd5e1">Staff</th><th style="padding:6px;border:1px solid #cbd5e1">Storage (KB)</th><th style="padding:6px;border:1px solid #cbd5e1">Subscription</th><th style="padding:6px;border:1px solid #cbd5e1">Last Activity</th></tr></thead><tbody>';
+  rows += '<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:#f1f5f9"><th style="padding:6px;border:1px solid #cbd5e1">Business</th><th style="padding:6px;border:1px solid #cbd5e1">Users</th><th style="padding:6px;border:1px solid #cbd5e1">Staff</th><th style="padding:6px;border:1px solid #cbd5e1">Storage</th><th style="padding:6px;border:1px solid #cbd5e1">Subscription</th><th style="padding:6px;border:1px solid #cbd5e1">Last Activity</th></tr></thead><tbody>';
   ftBizOrderIds(businesses).forEach(function(k) {
     var b = businesses[k];
     var usage = calculateBizDataUsage(Object.assign({id:k}, b));
     var subStatus = getBizSubscriptionStatus(Object.assign({id:k}, b));
     var presence = (platformData.presence||{})[k] || {};
-    rows += '<tr><td style="padding:5px;border:1px solid #cbd5e1">'+(b.name||'-')+'</td><td style="padding:5px;border:1px solid #cbd5e1;text-align:center">'+(((Number(b.staffCount)||0)+1))+'</td><td style="padding:5px;border:1px solid #cbd5e1;text-align:center">'+(b.staffCount||0)+'</td><td style="padding:5px;border:1px solid #cbd5e1;text-align:right">'+usage.currentKB.toFixed(1)+'</td><td style="padding:5px;border:1px solid #cbd5e1">'+subStatus+'</td><td style="padding:5px;border:1px solid #cbd5e1">'+(presence.lastActive?formatTimeAgo(presence.lastActive):'Never')+'</td></tr>';
+    rows += '<tr><td style="padding:5px;border:1px solid #cbd5e1">'+(b.name||'-')+'</td><td style="padding:5px;border:1px solid #cbd5e1;text-align:center">'+(((Number(b.staffCount)||0)+1))+'</td><td style="padding:5px;border:1px solid #cbd5e1;text-align:center">'+(b.staffCount||0)+'</td><td style="padding:5px;border:1px solid #cbd5e1;text-align:right">'+ftFmtKB(usage.currentKB)+'</td><td style="padding:5px;border:1px solid #cbd5e1">'+subStatus+'</td><td style="padding:5px;border:1px solid #cbd5e1">'+(presence.lastActive?formatTimeAgo(presence.lastActive):'Never')+'</td></tr>';
   });
   rows += '</tbody></table></div>';
   var container = document.createElement('div');
@@ -15671,7 +15671,7 @@ if (typeof __ftSwitchTab === 'function') {
 /* FinTrack business lifecycle: bundled inline in the downloadable single-file app. */
 function ftFormatBusinessId(number) { return 'FT-' + String(number).padStart(3, '0'); }
 function ftValidBusinessId(value) {
-  return typeof value === 'string' && /^FT-\d{3,}$/.test(value) && Number.isSafeInteger(Number(value.slice(3))) && Number(value.slice(3)) > 0 && ftFormatBusinessId(Number(value.slice(3))) === value;
+  return typeof value === 'string' && /^FT-\d{3,}$/.test(value) && Number.isSafeInteger(Number(value.slice(3))) && Number(value.slice(3)) >= 0 && ftFormatBusinessId(Number(value.slice(3))) === value;
 }
 function ftBusinessId(id, saved) {
   var value = ((platformData.businesses || {})[id] || {}).displayId;
@@ -18230,6 +18230,426 @@ window.ftbMonthlyWelcomeSplash = function (user) {
   ftbShowWelcomeSplash();
   return true;
 };
+
+</script><script>
+/* FinTrack Business — platform console patch
+   ------------------------------------------------------------------
+   1. A one-time tester business (FT-000) created from the Business
+      Directory, with a real administrator login and unrestricted
+      test month closing.
+   2. Accurate data usage for every business: the count of every entry
+      they have recorded and the size of what they actually store.
+   3. The report table reads Business ID, business, admin, staff,
+      total users, total services logged, storage, subscription and
+      last activity - with the expenses column removed.
+   4. The platform Master Service Catalogue shows five rows with a
+      scrollbar for the rest.
+   ------------------------------------------------------------------ */
+(function () {
+  'use strict';
+
+  function pd() { return (typeof platformData !== 'undefined' && platformData) ? platformData : {}; }
+
+  /* ---------------- platform catalogue: five visible rows ------------- */
+  try {
+    var style = document.createElement('style');
+    style.textContent =
+      '#ftMscScroll{max-height:322px !important;overflow-y:auto !important;overflow-x:auto !important;}' +
+      '#ftMscScroll thead th{position:sticky;top:0;background:#fff;z-index:2;}' +
+      '#ftMscScroll::-webkit-scrollbar{width:10px;height:10px;}' +
+      '#ftMscScroll::-webkit-scrollbar-thumb{background:rgba(11,30,45,.34);border-radius:10px;}';
+    document.head.appendChild(style);
+  } catch (e) { }
+
+  /* ---------------- tester business ---------------------------------- */
+  window.ftTesterBusinessId = function () {
+    var list = pd().businesses || {};
+    var id = pd().testerBusinessId;
+    if (id && list[id]) return id;
+    var found = null;
+    Object.keys(list).forEach(function (k) { if (!found && list[k] && list[k].isTester) found = k; });
+    return found;
+  };
+
+  window.ftIsTesterBusiness = function () {
+    try {
+      if (typeof authBusinessId === 'undefined' || !authBusinessId) return false;
+      var own = (pd().businesses || {})[authBusinessId];
+      return !!(own && (own.isTester || own.displayId === 'FT-000'));
+    } catch (e) { return false; }
+  };
+
+  window.ftRefreshTesterBusinessButton = function () {
+    var button = document.getElementById('paTesterBizBtn');
+    if (!button) return;
+    var signedInAsPlatform = (typeof platformAdminUser !== 'undefined') && !!platformAdminUser;
+    button.style.display = (signedInAsPlatform && !window.ftTesterBusinessId()) ? 'inline-flex' : 'none';
+  };
+
+  function placeTesterButton() {
+    if (document.getElementById('paTesterBizBtn')) { window.ftRefreshTesterBusinessButton(); return; }
+    var add = document.querySelector('[onclick="openAddBusinessModal()"]');
+    if (!add) return;
+    var button = document.createElement('button');
+    button.id = 'paTesterBizBtn';
+    button.type = 'button';
+    button.className = 'btn-secondary';
+    button.style.cssText = 'width:auto;padding:6px 14px;font-size:.8rem;border-color:#7c3aed;color:#5b21b6;display:none';
+    button.innerHTML = '<i class="fa-solid fa-flask"></i> Create Tester Account (FT-000)';
+    button.onclick = function () { window.createTesterBusinessAccount(); };
+    add.parentNode.insertBefore(button, add.nextSibling);
+    window.ftRefreshTesterBusinessButton();
+  }
+
+  window.createTesterBusinessAccount = async function () {
+    if (typeof platformAdminUser === 'undefined' || !platformAdminUser) return alert('Sign in as the platform administrator to create the tester account.');
+    if (window.ftTesterBusinessId()) return alert('The tester business (FT-000) already exists. Sign in to it through Admin Login to keep testing.');
+    var email = ftEmail(prompt('Tester business administrator email:', 'tester@fintrack.app') || '');
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return alert('Enter a valid email address for the tester administrator.');
+    var password = prompt('Password for the tester administrator (at least 6 characters):', 'Tester@' + String(Math.floor(100000 + Math.random() * 899999)));
+    if (!password || password.length < 6) return alert('Use a password of at least 6 characters.');
+    if (!confirm('Create the tester business FT-000?\n\nIt can be created only once. It works exactly like a real business - services, expenses, bank transfers, invoices, PDF downloads and a month closing at any time - and nothing it records touches your real businesses.')) return;
+    var button = document.getElementById('paTesterBizBtn');
+    if (button) button.disabled = true;
+    try {
+      await waitForPlatformData();
+      /* The tester's Firebase identity is created through the REST endpoint, so
+         the platform administrator's own session is never signed out. */
+      var response = await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' + FIREBASE_CONFIG.apiKey, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email, password: password, returnSecureToken: true })
+      });
+      var payload = await response.json().catch(function () { return {}; });
+      if (!response.ok) {
+        var reason = (payload && payload.error && payload.error.message) || 'unknown error';
+        if (reason.indexOf('EMAIL_EXISTS') !== -1) throw new Error('That email already has an account. Use a different email for the tester.');
+        throw new Error('The tester sign-in could not be created (' + reason + ').');
+      }
+      var uid = payload.localId;
+      var bizId = firebase.database().ref('businesses').push().key;
+      var record = {
+        name: 'FinTrack Tester', category: 'Testing', motto: 'Test account',
+        adminName: 'Tester Administrator', adminContact: '', adminEmail: email, adminUid: uid,
+        joiningDate: getISTDateStr(), staffCount: 0, blocked: false,
+        subscriptionStatus: 'active', subscriptionExpiry: '2099-12-31', trialEndDate: 0,
+        lastActivity: Date.now(), isCurrentBusiness: false, isTester: true,
+        displayId: 'FT-000', testerCreatedAt: Date.now()
+      };
+      /* A working starter workspace, exactly like a newly registered business. */
+      var legacy = null, savedAppData = appData;
+      try {
+        appData = buildEmptyBusinessData(record);
+        legacy = convertToLegacyFormat();
+      } finally { appData = savedAppData; }
+      if (!legacy) throw new Error('The tester workspace could not be prepared.');
+      await firebase.database().ref('businesses/' + bizId + '/data').set(legacy);
+      await firebase.database().ref('atmos_admin_businesses/' + uid).set({ b: bizId, email: email, createdAt: Date.now() });
+      await firebase.database().ref('atmos_platform_admin/businesses/' + bizId).set(record);
+      await firebase.database().ref('atmos_platform_admin/testerBusinessId').set(bizId);
+      try { await signinIndexRef(email).set({ b: bizId, a: 'ADM-001', g: 1 }); } catch (e) { }
+      platformData.businesses = platformData.businesses || {};
+      platformData.businesses[bizId] = record;
+      platformData.testerBusinessId = bizId;
+      try { await savePlatformData(); } catch (e) { }
+      try { window.ftEnsureBusinessIds ? window.ftEnsureBusinessIds() : ftEnsureBusinessIds(); } catch (e) { }
+      try { renderPlatformAdminViews(); } catch (e) { }
+      window.ftRefreshTesterBusinessButton();
+      alert('Tester business created.\n\nBusiness ID: FT-000\nName: FinTrack Tester\n\nSign in through Admin Login with:\nEmail: ' + email + '\nPassword: ' + password + '\n\nInside it, Admin Control - Month Closing has a "Test Month Closing" button that runs the full closing for any month you name.');
+    } catch (error) {
+      alert('The tester business could not be created.\n\n' + ((error && error.message) || error));
+    } finally { if (button) button.disabled = false; }
+  };
+
+  /* ---------------- test month closing ------------------------------- */
+  window.ftTesterOpenClosing = function () {
+    if (!window.ftIsTesterBusiness()) return alert('Only the tester business can open a closing at any time.');
+    if (typeof currentUser === 'undefined' || !currentUser || currentUser.role !== 'Admin') return alert('Sign in as the tester business administrator to close a month.');
+    var entered = prompt('Test Month Closing\n\nEnter the month to close (YYYY-MM):', getISTMonthStr());
+    if (!entered) return;
+    var mk = String(entered).trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mk)) return alert('Enter the month as YYYY-MM, for example 2026-11.');
+    if (!window.ftcOpenClosingWizard) return alert('The closing wizard is still loading. Try again in a moment.');
+    window.ftcOpenClosingWizard(mk);
+  };
+
+  function placeTesterClosingButton() {
+    if (document.getElementById('ftTesterCloseBtn')) return;
+    var slot = document.getElementById('ftcRecloseSlot');
+    if (!slot) return;
+    var button = document.createElement('button');
+    button.id = 'ftTesterCloseBtn';
+    button.type = 'button';
+    button.className = 'btn-secondary';
+    button.style.cssText = 'width:auto;display:none;border-color:#7c3aed;color:#5b21b6';
+    button.innerHTML = '<i class="fa-solid fa-flask"></i> Test Month Closing';
+    button.onclick = function () { window.ftTesterOpenClosing(); };
+    slot.parentNode.insertBefore(button, slot.nextSibling);
+  }
+
+  window.ftRefreshTesterClosingButton = function () {
+    var button = document.getElementById('ftTesterCloseBtn');
+    if (button) button.style.display = window.ftIsTesterBusiness() ? 'inline-block' : 'none';
+  };
+
+  /* ---------------- accurate usage measurement ----------------------- */
+  function countList(primary, fallback) { return (primary || fallback || []).length; }
+
+  function countsFromStored(data) {
+    data = data || {};
+    var counts = {
+      services: countList(data.serviceEntries, data.serviceLog),
+      expenses: countList(data.expenseEntries, data.expenseLog),
+      transfers: countList(data.internalTransfers, data.transferLog),
+      adminTransfers: countList(data.adminTransfers, data.adminTransfersLog),
+      invoices: countList(data.savedInvoices, data.invoices)
+    };
+    counts.entries = counts.services + counts.expenses + counts.transfers + counts.adminTransfers + counts.invoices;
+    return counts;
+  }
+
+  function countsFromFacts(facts) {
+    var counts = {
+      services: Number(facts.servicesLogged) || 0,
+      expenses: Number(facts.expensesLogged) || 0,
+      transfers: Number(facts.transfersLogged) || 0,
+      adminTransfers: Number(facts.adminTransfersLogged) || 0,
+      invoices: Number(facts.invoicesLogged) || 0
+    };
+    counts.entries = counts.services + counts.expenses + counts.transfers + counts.adminTransfers + counts.invoices;
+    return counts;
+  }
+
+  var scanning = null, scannedAt = 0;
+
+  window.ftScanBusinessUsage = function (force) {
+    if (scanning) return scanning;
+    if (!force && scannedAt && (Date.now() - scannedAt) < 60000) return Promise.resolve(pd().dataUsage || {});
+    if (typeof platformAdminUser === 'undefined' || !platformAdminUser) return Promise.resolve({});
+    var root;
+    try { root = firebase.database(); } catch (e) { return Promise.resolve({}); }
+    var store = pd();
+    store.dataUsage = store.dataUsage || {};
+    var ids = (window.ftBizOrderIds ? window.ftBizOrderIds(store.businesses || {}) : Object.keys(store.businesses || {}));
+    scanning = (async function () {
+      for (var i = 0; i < ids.length; i++) {
+        var id = ids[i], facts = null, counts = null, kb = 0, known = false;
+        try {
+          var snap = await root.ref('businesses/' + id).get();
+          if (snap && snap.exists()) {
+            var stored = snap.val() || {};
+            kb = JSON.stringify(stored).length / 1024;
+            known = true;
+            counts = countsFromStored(stored.data || stored);
+          }
+        } catch (e) { }
+        if (!facts) {
+          try {
+            var f = await root.ref('businesses/' + id + '/meta/facts').get();
+            if (f && f.exists()) facts = f.val() || {};
+          } catch (e) { }
+        }
+        if (facts) {
+          if (!known && Number(facts.usageKB) > 0) { kb = Number(facts.usageKB); known = true; }
+          if (!counts) counts = countsFromFacts(facts);
+        }
+        var previous = store.dataUsage[id] || {};
+        if (!known) kb = Number(previous.currentKB) || 0;
+        if (!counts) counts = {
+          services: Number(previous.services) || 0, expenses: Number(previous.expenses) || 0,
+          transfers: Number(previous.transfers) || 0, adminTransfers: Number(previous.adminTransfers) || 0,
+          invoices: Number(previous.invoices) || 0,
+          entries: previous.entries === undefined || previous.entries === null ? null : Number(previous.entries)
+        };
+        store.dataUsage[id] = Object.assign({}, previous, counts, { currentKB: kb, measuredAt: Date.now() });
+        if (kb > 0 && window.ftRememberBizKB) window.ftRememberBizKB(id, Math.round(kb * 10) / 10);
+      }
+      return store.dataUsage;
+    })();
+    return scanning.then(function (result) {
+      scanning = null; scannedAt = Date.now();
+      try { if (window.savePlatformData) window.savePlatformData(); } catch (e) { }
+      return result;
+    }, function () { scanning = null; scannedAt = Date.now(); return {}; });
+  };
+
+  window.ftRequestUsageRefresh = function (paint) {
+    if (!window.ftScanBusinessUsage) return;
+    if (window.ftUsagePending) return;
+    if (scannedAt && (Date.now() - scannedAt) < 60000) return;
+    window.ftUsagePending = true;
+    window.ftScanBusinessUsage(true).then(function () {
+      window.ftUsagePending = false;
+      try { if (typeof paint === 'function') paint(); } catch (e) { }
+    }, function () { window.ftUsagePending = false; });
+  };
+
+  /* Every entry count and the measured size are kept together, so a business
+     that has recorded 57 entries can never be reported as "1.3 KB" again. */
+  window.calculateBizDataUsage = function (b) {
+    b = b || {};
+    var usage = (pd().dataUsage || {})[b.id] || {};
+    var currentKB = Number(usage.currentKB) || 0;
+    if (!currentKB && Number(b.dataKB) > 0) currentKB = Number(b.dataKB);
+    if (!currentKB) { var remembered = (window.ftBizKB || {})[b.id] || 0; if (remembered > 0) currentKB = remembered; }
+    var entries = (usage.entries === undefined || usage.entries === null) ? null : Number(usage.entries);
+    if (b.isCurrentBusiness && typeof appData !== 'undefined' && appData) {
+      currentKB = JSON.stringify(appData).length / 1024;
+      entries = (appData.serviceLog || []).length + (appData.expenseLog || []).length + (appData.transferLog || []).length + (appData.adminTransfers || []).length + (appData.invoices || []).length;
+    }
+    return {
+      currentKB: currentKB, known: currentKB > 0, entries: entries,
+      cumulativeKB: Number(usage.cumulativeKB) || 0,
+      todayKB: Number(usage.todayKB) || 0,
+      weeklyKB: Number(usage.weeklyKB) || 0,
+      monthlyKB: Number(usage.monthlyKB) || 0,
+      estimated: !b.isCurrentBusiness
+    };
+  };
+
+  /* ---------------- reports & limits -------------------------------- */
+  var REPORT_HEAD = '<tr><th>Business ID</th><th>Business</th><th>Admin</th><th>Staff</th><th>Users</th><th>Total Services Logged</th><th>Storage</th><th>Subscription</th><th>Last Activity</th></tr>';
+
+  window.renderPAReports = function () {
+    var period = document.getElementById('paReportPeriod') ? document.getElementById('paReportPeriod').value : 'weekly';
+    var businesses = pd().businesses || {};
+    var bizArr = (window.ftBizOrderIds ? window.ftBizOrderIds(businesses) : Object.keys(businesses)).map(function (k) { return Object.assign({ id: k }, businesses[k]); });
+    var now = Date.now();
+    var periodStart = period === 'weekly' ? now - 7 * 24 * 60 * 60 * 1000 : now - 30 * 24 * 60 * 60 * 1000;
+    var newBiz = bizArr.filter(function (b) { return (b.joiningDate ? new Date(b.joiningDate).getTime() : 0) > periodStart; }).length;
+    var totalUsers = bizArr.reduce(function (s, b) { return s + (Number(b.staffCount) || 0) + 1; }, 0);
+    var activeBiz = 0, dormantBiz = 0, totalStorage = 0;
+    var sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+    bizArr.forEach(function (b) {
+      var presence = ftPresenceInfo((pd().presence || {})[b.id] || {});
+      if ((presence.lastActive || b.lastActive || b.lastActivity || 0) > sevenDaysAgo) activeBiz++; else dormantBiz++;
+      totalStorage += window.calculateBizDataUsage(b).currentKB;
+    });
+    var metrics = document.getElementById('paReportMetrics');
+    if (metrics) metrics.innerHTML =
+      metricBox('New Businesses (' + period + ')', newBiz, 'fa-building', 'blue') +
+      metricBox('Total Users', totalUsers, 'fa-users', 'green') +
+      metricBox('Active Businesses', activeBiz, 'fa-circle-check', 'green') +
+      metricBox('Dormant Businesses', dormantBiz, 'fa-moon', 'amber') +
+      metricBox('Total Storage', ftFmtKB(totalStorage), 'fa-database', 'purple');
+
+    var body = document.getElementById('paReportTable');
+    if (body) {
+      var table = body.closest('table');
+      var head = table ? table.querySelector('thead') : null;
+      if (head && head.innerHTML !== REPORT_HEAD) head.innerHTML = REPORT_HEAD;
+      body.innerHTML = '';
+      if (!bizArr.length) {
+        body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No businesses registered.</td></tr>';
+      } else {
+        bizArr.forEach(function (b) {
+          var usage = window.calculateBizDataUsage(b);
+          var subStatus = getBizSubscriptionStatus(b);
+          var presence = ftPresenceInfo((pd().presence || {})[b.id] || {});
+          var staff = Number(b.staffCount) || 0;
+          var id = window.ftBusinessId ? window.ftBusinessId(b.id, b.displayId) : (b.displayId || '-');
+          var row = document.createElement('tr');
+          row.innerHTML =
+            '<td style="font-family:monospace;font-weight:800">' + id + '</td>' +
+            '<td><strong>' + (b.name || '-') + '</strong></td>' +
+            '<td>1</td>' +
+            '<td>' + staff + '</td>' +
+            '<td>' + (staff + 1) + '</td>' +
+            '<td><strong>' + (usage.entries === null ? '&mdash;' : usage.entries) + '</strong></td>' +
+            '<td>' + (usage.known ? window.ftFmtKB(usage.currentKB) : '&mdash;') + '</td>' +
+            '<td><span class="pa-badge pa-badge-' + subStatus + '">' + subStatus + '</span></td>' +
+            '<td style="font-size:.78rem">' + (presence.lastActive ? formatTimeAgo(presence.lastActive) : 'Never') + '</td>';
+          body.appendChild(row);
+        });
+      }
+    }
+
+    var limits = pd().limits || {};
+    if (document.getElementById('paLimitMaxBiz')) document.getElementById('paLimitMaxBiz').value = limits.maxBusinesses || 100;
+    if (document.getElementById('paLimitMaxUsers')) document.getElementById('paLimitMaxUsers').value = limits.maxUsers || 5000;
+    if (document.getElementById('paLimitMaxStaff')) document.getElementById('paLimitMaxStaff').value = limits.maxStaffPerBusiness || 20;
+    if (document.getElementById('paLimitStorage')) document.getElementById('paLimitStorage').value = limits.storageWarningThresholdMB || 500;
+    if (document.getElementById('paLimitAutoBlock')) document.getElementById('paLimitAutoBlock').checked = !!limits.autoBlock;
+
+    var warnings = '';
+    if (bizArr.length >= (limits.maxBusinesses || 100) * 0.9) warnings += '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-md);padding:10px 14px;margin-bottom:8px"><i class="fa-solid fa-triangle-exclamation" style="color:#92400e"></i> <strong style="color:#92400e">Approaching business limit:</strong> ' + bizArr.length + ' of ' + limits.maxBusinesses + ' businesses registered.</div>';
+    if (totalUsers >= (limits.maxUsers || 5000) * 0.9) warnings += '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-md);padding:10px 14px;margin-bottom:8px"><i class="fa-solid fa-triangle-exclamation" style="color:#92400e"></i> <strong style="color:#92400e">Approaching user limit:</strong> ' + totalUsers + ' of ' + limits.maxUsers + ' users.</div>';
+    bizArr.forEach(function (b) {
+      var usage = window.calculateBizDataUsage(b);
+      if (usage.currentKB / 1024 > (limits.storageWarningThresholdMB || 500) * 0.9) {
+        warnings += '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-md);padding:10px 14px;margin-bottom:8px"><i class="fa-solid fa-database" style="color:#92400e"></i> <strong style="color:#92400e">Storage warning:</strong> ' + (b.name || b.displayId || '-') + ' is using ' + (usage.currentKB / 1024).toFixed(1) + ' MB (threshold: ' + limits.storageWarningThresholdMB + ' MB).</div>';
+      }
+    });
+    if (!warnings) warnings = '<div style="text-align:center;color:var(--text-muted);padding:12px"><i class="fa-solid fa-circle-check" style="color:var(--accent-green)"></i> No warnings. All within configured limits.</div>';
+    var box = document.getElementById('paWarningsBox');
+    if (box) box.innerHTML = warnings;
+
+    window.ftRequestUsageRefresh(function () {
+      try { window.renderPAReports(); } catch (e) { }
+      try { window.renderPABusinesses(); } catch (e) { }
+    });
+  };
+
+  /* ---------------- keep the directory in step ----------------------- */
+  var drawDirectory = window.renderPABusinesses;
+  window.renderPABusinesses = function () {
+    if (typeof drawDirectory === 'function') drawDirectory.apply(this, arguments);
+    window.ftRefreshTesterBusinessButton();
+    window.ftRequestUsageRefresh(function () {
+      try { if (typeof drawDirectory === 'function') drawDirectory(); } catch (e) { }
+      try { window.renderPAReports(); } catch (e) { }
+    });
+  };
+
+  var publishFacts = window.ftPublishBusinessFacts;
+  if (typeof publishFacts === 'function') {
+    window.ftPublishBusinessFacts = function () {
+      try {
+        if (typeof currentUser === 'undefined' || !currentUser || currentUser.role !== 'Admin' || platformAdminUser || !authBusinessId) return publishFacts();
+        var stamp = window.__ftFactsStamp || 0;
+        if ((Date.now() - stamp) < 15000) return;
+        window.__ftFactsStamp = Date.now();
+        var logged = {
+          servicesLogged: (appData.serviceLog || []).length,
+          expensesLogged: (appData.expenseLog || []).length,
+          transfersLogged: (appData.transferLog || []).length,
+          adminTransfersLogged: (appData.adminTransfers || []).length,
+          invoicesLogged: (appData.invoices || []).length
+        };
+        logged.entriesLogged = logged.servicesLogged + logged.expensesLogged + logged.transfersLogged + logged.adminTransfersLogged + logged.invoicesLogged;
+        firebase.database().ref('businesses/' + authBusinessId + '/meta/facts').update(logged).catch(function () { });
+      } catch (e) { }
+      return publishFacts();
+    };
+  }
+
+  /* ---------------- wire the new controls in ------------------------- */
+  var checkStatus = window.checkMonthClosingStatus;
+  if (typeof checkStatus === 'function') {
+    window.checkMonthClosingStatus = function () {
+      var result = checkStatus.apply(this, arguments);
+      try { window.ftRefreshTesterClosingButton(); } catch (e) { }
+      return result;
+    };
+  }
+
+  function wire() {
+    placeTesterButton();
+    placeTesterClosingButton();
+    window.ftRefreshTesterClosingButton();
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
+  else wire();
+  setTimeout(wire, 1500);
+  setTimeout(wire, 4000);
+
+  /* The platform console redraws on its own schedule; keep the new buttons
+     in place after every redraw. */
+  setInterval(function () {
+    placeTesterButton();
+    placeTesterClosingButton();
+  }, 5000);
+})();
 
 </script>
 </body>
