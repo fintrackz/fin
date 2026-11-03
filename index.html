@@ -5406,7 +5406,7 @@ const FIREBASE_CONFIG = {
         managed = true;
         managedGen = managedRun.gen;
       }
-      if (!owned || !owned.record) throw new Error('Your email is verified, but business registration is incomplete. Open Register Your Business and use this same email and password to finish it.');
+      if (!owned || !owned.record) throw new Error('No business is registered under this email. Register again with the same email and password - a deleted business gets a new Business ID.');
       if (owned.record.deletedAt) throw new Error('This business is unavailable. Contact the platform administrator.');
       detachTenant();
       bindActiveBusiness(owned.id);
@@ -5474,7 +5474,7 @@ const FIREBASE_CONFIG = {
         resolveSigninRoute(typedDigits || typedId).then(function (route) {
           if (!route) {
             if (submitBtn) { submitBtn.disabled = false; if (submitBtn.dataset.label) submitBtn.innerHTML = submitBtn.dataset.label; }
-            showLoginError('No staff account matches that mobile number. Please check with your administrator.');
+            showLoginError('No data found for this account. Please contact your business administrator.');
             return;
           }
           setPendingBusinessId(route.businessId);
@@ -18217,6 +18217,65 @@ function ftbPrevMonthKey(monthKey) {
   if (month === 0) { month = 12; year = year - 1; }
   return year + '-' + (month < 10 ? '0' + month : '' + month);
 }
+
+/* ------------------------------------------------------------------
+   REMOVED STAFF AND REMOVED BUSINESSES
+   A staff member's routing entry outlives their record: an administrator
+   can delete the person after it was written, and their secure identity
+   still exists. The roster stored with the business therefore decides,
+   before any business data is opened. A deleted business keeps no roster
+   at all, so the same check covers its former staff as well.
+   ------------------------------------------------------------------ */
+function ftRosterMembers() {
+  var root = businessDataRef();
+  return Promise.all([root.child('userAccounts').once('value'), root.child('users').once('value')]).then(function (snapshots) {
+    var members = [];
+    snapshots.forEach(function (snapshot) {
+      var value = snapshot.val();
+      if (!value) return;
+      Object.keys(value).forEach(function (key) { if (value[key]) members.push(value[key]); });
+    });
+    return members;
+  });
+}
+
+function ftStaffStillEnrolled(user) {
+  var wanted = (user && user.id !== undefined && user.id !== null && user.id !== '') ? String(user.id) : '';
+  var digits = String((user && user.mobile) || '').replace(/[^0-9]/g, '');
+  var email = String((user && user.email) || '').trim().toLowerCase();
+  return ftRosterMembers().then(function (members) {
+    return members.some(function (member) {
+      if (!member || member.role === 'Admin') return false;
+      if (wanted && member.id !== undefined && member.id !== null && String(member.id) === wanted) return true;
+      if (digits && String(member.mobile || '').replace(/[^0-9]/g, '') === digits) return true;
+      return !!email && String(member.email || '').trim().toLowerCase() === email;
+    });
+  });
+}
+
+var ftCompleteLoginBefore = window.completeFirebaseLogin;
+window.completeFirebaseLogin = function (user, pass, submitBtn) {
+  if (typeof ftCompleteLoginBefore !== 'function') return;
+  if (!user || user.role === 'Admin') return ftCompleteLoginBefore(user, pass, submitBtn);
+  function restoreButton() { if (submitBtn) { submitBtn.disabled = false; if (submitBtn.dataset.label) submitBtn.innerHTML = submitBtn.dataset.label; } }
+  return Promise.resolve().then(function () {
+    return ftLoginRequest(firebaseSignIn(user, pass)).then(function (uid) {
+      return ftLoginRequest(adoptOrVerifyTenant(uid, user)).then(function () {
+        return ftLoginRequest(ftStaffStillEnrolled(user));
+      });
+    });
+  }).then(function (enrolled) {
+    if (enrolled) return ftCompleteLoginBefore(user, pass, submitBtn);
+    try { firebaseAuth().signOut(); } catch (e) {}
+    detachTenant();
+    restoreButton();
+    showLoginError('No data found for this account. It may have been removed. Please contact your business administrator.');
+  }, function () {
+    /* An identity the check could not verify keeps the normal sign-in error,
+       so every other failure is reported exactly as before. */
+    return ftCompleteLoginBefore(user, pass, submitBtn);
+  });
+};
 
 window.ftbMonthlyWelcomeSplash = function (user) {
   try {
